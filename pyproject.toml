@@ -1,0 +1,34 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "yt-cli"
+version = "1.0.0"
+description = "Unified YouTube search / radio / news player (monolithic single-file CLI)."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "ruff>=0.6",
+]
+
+[tool.hatch.build.targets.wheel]
+bypass-selection = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+norecursedirs = ["tests/e2e", "docs", "e2e"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+extend-exclude = ["tests/e2e", "docs"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+ignore = ["E501"]

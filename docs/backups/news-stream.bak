@@ -1,0 +1,1695 @@
+#!/usr/bin/env python3
+"""
+news-stream: Configurable Filipino News Live Stream Finder
+Interactive TUI mode (ani-cli style) + CLI mode
+Uses only Python standard library - no external dependencies
+"""
+
+import urllib.request
+import urllib.error
+import urllib.parse
+import json
+import re
+import sys
+import subprocess
+import os
+import html
+import configparser
+import signal
+from pathlib import Path
+from datetime import datetime
+
+# ─── ANSI COLORS & STYLES ────────────────────────────────────────────────────
+
+
+class C:
+    RESET = "\033[0m"
+    BOLD = "\033[1m"
+    DIM = "\033[2m"
+
+    RED = "\033[31m"
+    GREEN = "\033[32m"
+    YELLOW = "\033[33m"
+    BLUE = "\033[34m"
+    MAGENTA = "\033[35m"
+    CYAN = "\033[36m"
+    WHITE = "\033[37m"
+
+    BG_DARK = "\033[48;5;234m"
+
+    LIVE = f"\033[31m{BOLD}● LIVE{RESET}"
+    RECENT = f"\033[33m⏱{RESET}"
+    PLAY = f"\033[32m▶{RESET}"
+
+
+def c(color, text):
+    return f"{color}{text}{C.RESET}"
+
+
+# ─── SPINNER ──────────────────────────────────────────────────────────────────
+
+import threading
+import time as _time
+
+class Spinner:
+    FRAMES = '⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
+
+    def __init__(self, label):
+        self.label    = label
+        self._stop    = threading.Event()
+        self._thread  = threading.Thread(target=self._spin, daemon=True)
+
+    def _spin(self):
+        i = 0
+        while not self._stop.is_set():
+            frame = self.FRAMES[i % len(self.FRAMES)]
+            sys.stdout.write(f"\r  {c(C.CYAN, frame)}  {c(C.DIM, self.label)}      ")
+            sys.stdout.flush()
+            _time.sleep(0.1)
+            i += 1
+
+    def __enter__(self):
+        self._thread.start()
+        return self
+
+    def __exit__(self, *_):
+        self._stop.set()
+        self._thread.join()
+        sys.stdout.write('\r' + ' ' * 60 + '\r')
+        sys.stdout.flush()
+
+    def done(self, msg, color=C.GREEN):
+        self._stop.set()
+        self._thread.join()
+        sys.stdout.write(f"\r  {c(color, '✓')}  {msg}" + ' ' * 40 + '\n')
+        sys.stdout.flush()
+
+    def fail(self, msg):
+        self._stop.set()
+        self._thread.join()
+        sys.stdout.write(f"\r  {c(C.YELLOW, '⚠')}  {msg}" + ' ' * 40 + '\n')
+        sys.stdout.flush()
+
+
+# ─── DEFAULT CONFIG ───────────────────────────────────────────────────────────
+
+DEFAULT_CONFIG = """[settings]
+# Default video player (mpv, vlc, or ffplay)
+player = auto
+
+# Maximum height for video streams (360, 480, 720, 1080, or best)
+quality = 720
+
+# Timeout for HTTP requests (seconds)
+timeout = 15
+
+# Accept streams from last N hours (for shows that may not have LIVE badge)
+recent_hours = 24
+
+[source.tv-patrol]
+name = TV Patrol
+channel_id = UCmSC7hbgi9Ver7Z66y4ES-g
+keywords = tv patrol, patrol live, abs-cbn patrol
+fallback_url = https://www.youtube.com/@abscbnnews/streams
+enabled = true
+
+[source.frontline]
+name = Frontline Pilipinas
+channel_id = UCmSC7hbgi9Ver7Z66y4ES-g
+keywords = frontline pilipinas, frontline express, frontline weekend
+fallback_url = https://www.youtube.com/@News5Everywhere/streams
+enabled = true
+
+[source.24-oras]
+name = 24 Oras
+channel_id = UCqYw-CTd1dU2yGI71sEyqNw
+keywords = 24 oras, 24 oras live, twenty four oras
+fallback_url = https://www.youtube.com/@gmanews/streams
+enabled = true
+
+[source.saksi]
+name = Saksi
+channel_id = UCqYw-CTd1dU2yGI71sEyqNw
+keywords = saksi, saksi live, gma saksi
+fallback_url = https://www.youtube.com/@gmanews/streams
+enabled = true
+
+[source.bandila]
+name = Bandila
+channel_id = UCmSC7hbgi9Ver7Z66y4ES-g
+keywords = bandila, bandila live, abs-cbn bandila
+fallback_url = https://www.youtube.com/@abscbnnews/streams
+enabled = true
+
+[source.state-of-the-nation]
+name = State of the Nation
+channel_id = UCqYw-CTd1dU2yGI71sEyqNw
+keywords = state of the nation, son, jessica soho
+fallback_url = https://www.youtube.com/@gmanews/streams
+enabled = true
+
+[source.anc]
+name = ANC Live
+channel_id = UCVdntTbXyAq0geO1t8zKALg
+keywords = anc, anc live, abs-cbn anc
+fallback_url = https://www.youtube.com/@ANCalerts/streams
+enabled = true
+
+[source.ted-failon-dj-chacha]
+name = Ted Failon DJ Chacha sa True FM
+channel_id = TrueNetworkPH
+keywords = ted failon, dj chacha, true fm, radyo5, failon chacha, ted and chacha
+fallback_url = https://www.youtube.com/@TrueNetworkPH/streams
+enabled = true
+
+[source.sana-lourd]
+name = Sana Lourd
+channel_id = TrueNetworkPH
+keywords = sana lourd, lourd de veyra
+fallback_url = https://www.youtube.com/@TrueNetworkPH/streams
+enabled = true
+
+[source.good-morning-bayan]
+name = Good Morning Bayan
+channel_id = TrueNetworkPH
+keywords = good morning bayan, gmb, morning bayan
+fallback_url = https://www.youtube.com/@TrueNetworkPH/streams
+enabled = true
+
+# Add your own sources below following this format:
+# [source.my-custom-news]
+# name = My News Channel
+# channel_id = UCxxxxxxxxxxxxxxxxxxxxxxxxxxx
+# keywords = keyword1, keyword2, keyword3
+# fallback_url = https://www.youtube.com/@channel/streams
+# enabled = true
+"""
+
+CONFIG_DIR = Path.home() / ".config" / "news-stream"
+CONFIG_FILE = CONFIG_DIR / "config.ini"
+
+# ─── CONFIG ───────────────────────────────────────────────────────────────────
+
+
+def init_config():
+    if not CONFIG_DIR.exists():
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    if not CONFIG_FILE.exists():
+        with open(CONFIG_FILE, "w") as f:
+            f.write(DEFAULT_CONFIG)
+        return True
+    return False
+
+
+def load_config():
+    config = configparser.ConfigParser(interpolation=None)
+    config.read(CONFIG_FILE)
+    return config
+
+
+def get_sources(config):
+    sources = {}
+    for section in config.sections():
+        if not section.startswith("source."):
+            continue
+        if not config.getboolean(section, "enabled", fallback=True):
+            continue
+        source_id = section.replace("source.", "")
+        sources[source_id] = {
+            "name": config.get(section, "name"),
+            "channel_id": config.get(section, "channel_id", fallback=None),
+            "keywords": [
+                k.strip().lower() for k in config.get(section, "keywords").split(",")
+            ],
+            "fallback_url": config.get(section, "fallback_url"),
+            "enabled": config.getboolean(section, "enabled", fallback=True),
+        }
+    return sources
+
+
+# ─── HTTP ─────────────────────────────────────────────────────────────────────
+
+
+def fetch_url(url, headers=None, timeout=15):
+    if headers is None:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.5",
+        }
+    try:
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, timeout=timeout) as response:
+            return response.read().decode("utf-8", errors="ignore")
+    except urllib.error.HTTPError as e:
+        return f"HTTP Error {e.code}: {e.reason}"
+    except urllib.error.URLError as e:
+        return f"URL Error: {e.reason}"
+    except Exception as e:
+        return f"Error: {str(e)}"
+
+
+# ─── YOUTUBE SCRAPING ─────────────────────────────────────────────────────────
+
+
+def extract_yt_initial_data(html_content):
+    patterns = [
+        r"var ytInitialData = ({.*?});</script>",
+        r'window\["ytInitialData"\] = ({.*?});',
+        r"ytInitialData\s*=\s*({.*?});",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, html_content, re.DOTALL)
+        if match:
+            try:
+                return json.loads(match.group(1))
+            except json.JSONDecodeError:
+                continue
+    return None
+
+
+def parse_relative_time(time_text):
+    if not time_text:
+        return 9999
+    time_text = time_text.lower()
+    patterns = [
+        (r"(\d+)\s*hour", 1),
+        (r"(\d+)\s*day", 24),
+        (r"(\d+)\s*week", 168),
+        (r"(\d+)\s*month", 720),
+        (r"(\d+)\s*minute", 1 / 60),
+        (r"(\d+)\s*second", 1 / 3600),
+    ]
+    for pattern, multiplier in patterns:
+        match = re.search(pattern, time_text)
+        if match:
+            return float(match.group(1)) * multiplier
+    if any(x in time_text for x in ["just now", "moments ago", "minute ago"]):
+        return 0
+    return 9999
+
+
+def parse_video_renderer(video, keywords, channel_name, recent_hours=24):
+    try:
+        video_id = video.get("videoId", "")
+        title_runs = video.get("title", {}).get("runs", [])
+        title = "".join(run.get("text", "") for run in title_runs)
+        if not title:
+            title = video.get("title", {}).get("simpleText", "")
+
+        title_lower = title.lower()
+        if not any(kw in title_lower for kw in keywords):
+            return None
+
+        # Live badge check
+        is_live = False
+        for badge in video.get("badges", []):
+            br = badge.get("metadataBadgeRenderer", {})
+            if (
+                br.get("style") == "BADGE_STYLE_TYPE_LIVE_NOW"
+                or br.get("label", "").upper() == "LIVE"
+            ):
+                is_live = True
+                break
+
+        for overlay in video.get("thumbnailOverlays", []):
+            if "thumbnailOverlayTimeStatusRenderer" in overlay:
+                if overlay["thumbnailOverlayTimeStatusRenderer"].get("style") == "LIVE":
+                    is_live = True
+                    break
+
+        # Recency
+        published_text = ""
+        hours_ago = 9999
+        if "publishedTimeText" in video:
+            pt = video["publishedTimeText"]
+            if "runs" in pt:
+                published_text = "".join(r.get("text", "") for r in pt["runs"])
+            else:
+                published_text = pt.get("simpleText", "")
+            hours_ago = parse_relative_time(published_text)
+
+        if not is_live and hours_ago > recent_hours:
+            return None
+
+        # View count
+        view_count = ""
+        if "viewCountText" in video:
+            vct = video["viewCountText"]
+            if "simpleText" in vct:
+                view_count = vct["simpleText"]
+            elif "runs" in vct:
+                view_count = "".join(r.get("text", "") for r in vct["runs"])
+
+        return {
+            "id": video_id,
+            "title": html.unescape(title),
+            "url": f"https://www.youtube.com/watch?v={video_id}",
+            "is_live": is_live,
+            "view_count": view_count,
+            "published_text": published_text,
+            "hours_ago": hours_ago,
+            "source": channel_name,
+        }
+    except Exception:
+        return None
+
+
+def find_streams(data, keywords, channel_name, recent_hours=24):
+    streams = []
+    try:
+        contents = data.get("contents") or data.get("response", {}).get("contents")
+        if not contents:
+            return streams
+
+        browse = contents.get("twoColumnBrowseResultsRenderer", {})
+        tabs = browse.get("tabs", [])
+
+        for tab in tabs:
+            content = tab.get("tabRenderer", {}).get("content", {})
+            grid = content.get("richGridRenderer", {})
+            sections = grid.get("contents", []) or content.get(
+                "sectionListRenderer", {}
+            ).get("contents", [])
+
+            for section in sections:
+                videos = []
+
+                if "richItemRenderer" in section:
+                    item = section["richItemRenderer"].get("content", {})
+                    v = item.get("videoRenderer")
+                    if v:
+                        videos.append(v)
+
+                elif "shelfRenderer" in section:
+                    shelf_content = section["shelfRenderer"].get("content", {})
+                    if "horizontalListRenderer" in shelf_content:
+                        for item in shelf_content["horizontalListRenderer"].get(
+                            "items", []
+                        ):
+                            v = item.get("gridVideoRenderer")
+                            if v:
+                                videos.append(v)
+                    elif "expandedShelfContentsRenderer" in shelf_content:
+                        for item in shelf_content["expandedShelfContentsRenderer"].get(
+                            "items", []
+                        ):
+                            v = item.get("videoRenderer")
+                            if v:
+                                videos.append(v)
+
+                elif "itemSectionRenderer" in section:
+                    for item in section["itemSectionRenderer"].get("contents", []):
+                        v = item.get("videoRenderer") or item.get("gridVideoRenderer")
+                        if v:
+                            videos.append(v)
+
+                for v in videos:
+                    info = parse_video_renderer(v, keywords, channel_name, recent_hours)
+                    if info:
+                        streams.append(info)
+
+    except Exception:
+        pass
+
+    streams.sort(key=lambda x: (not x["is_live"], x.get("hours_ago", 9999)))
+    return streams
+
+
+def search_youtube(query, keywords, channel_id=None, timeout=15, recent_hours=24):
+    streams = []
+
+    # Channel streams page
+    if channel_id:
+        if channel_id.startswith("@") or not channel_id.startswith("UC"):
+            handle = channel_id if channel_id.startswith("@") else f"@{channel_id}"
+            channel_url = f"https://www.youtube.com/{handle}/streams"
+        else:
+            channel_url = f"https://www.youtube.com/channel/{channel_id}/streams"
+
+        html_content = fetch_url(channel_url, timeout=timeout)
+        if not html_content.startswith(("Error", "HTTP")):
+            data = extract_yt_initial_data(html_content)
+            if data:
+                streams.extend(find_streams(data, keywords, query, recent_hours))
+
+    # YouTube search (live filter)
+    search_url = f"https://www.youtube.com/results?search_query={urllib.parse.quote(query + ' live')}&sp=EgJAAQ%253D%253D"
+    html_content = fetch_url(search_url, timeout=timeout)
+    if not html_content.startswith(("Error", "HTTP")):
+        data = extract_yt_initial_data(html_content)
+        if data:
+            try:
+                contents = (
+                    data.get("contents", {})
+                    .get("twoColumnSearchResultsRenderer", {})
+                    .get("primaryContents", {})
+                    .get("sectionListRenderer", {})
+                    .get("contents", [])
+                )
+                for section in contents:
+                    if "itemSectionRenderer" in section:
+                        for item in section["itemSectionRenderer"].get("contents", []):
+                            v = item.get("videoRenderer")
+                            if v:
+                                info = parse_video_renderer(
+                                    v, keywords, "YouTube Search", recent_hours
+                                )
+                                if info:
+                                    streams.append(info)
+            except Exception:
+                pass
+
+    # Deduplicate by video ID, live first
+    seen, unique = set(), []
+    for s in streams:
+        if s["id"] not in seen:
+            seen.add(s["id"])
+            unique.append(s)
+    unique.sort(key=lambda x: (not x["is_live"], x.get("hours_ago", 9999)))
+    return unique
+
+
+# ─── PLAYBACK ─────────────────────────────────────────────────────────────────
+
+
+def get_direct_stream_url(youtube_url, quality="720"):
+    quality_map = {
+        "360": "best[height<=360]/worst",
+        "480": "best[height<=480]/best",
+        "720": "best[height<=720]/best",
+        "1080": "best[height<=1080]/best",
+        "best": "best",
+    }
+    format_str = quality_map.get(quality, quality_map["720"])
+    for tool in ["yt-dlp", "youtube-dl"]:
+        try:
+            result = subprocess.run(
+                [tool, "-g", "-f", format_str, youtube_url],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                return result.stdout.strip().split("\n")[0]
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            continue
+    return None
+
+
+def detect_player():
+    for p in ["mpv", "vlc", "ffplay"]:
+        try:
+            subprocess.run(["which", p], capture_output=True, check=True)
+            return p
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            continue
+    return None
+
+
+def list_players():
+    """Return list of installed players."""
+    found = []
+    for p in ["mpv", "vlc", "ffplay"]:
+        try:
+            subprocess.run(["which", p], capture_output=True, check=True)
+            found.append(p)
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            continue
+    return found
+
+
+def launch_player(url, player, quality="720"):
+    """Launch player as background process. Returns Popen object."""
+    if player == "mpv":
+        cmd = [
+            "mpv",
+            "--really-quiet",
+            f"--ytdl-format=best[height<={quality}]/best",
+            url,
+        ]
+    elif player == "vlc":
+        cmd = ["vlc", "--intf", "dummy", url]
+    elif player == "ffplay":
+        cmd = ["ffplay", "-window_title", "News Stream", "-autoexit", url]
+    else:
+        cmd = [player, url]
+
+    return subprocess.Popen(
+        cmd,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,  # gives it its own process group
+    )
+
+
+def kill_player(proc):
+    """Kill player and its entire process group. No zombies."""
+    if proc is None:
+        return
+    try:
+        pgid = os.getpgid(proc.pid)
+        os.killpg(pgid, signal.SIGTERM)
+        try:
+            proc.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            os.killpg(pgid, signal.SIGKILL)
+    except (ProcessLookupError, OSError):
+        pass  # already dead
+
+
+# ─── TERMINAL HELPERS ─────────────────────────────────────────────────────────
+
+
+def clear_screen():
+    sys.stdout.write("\033[2J\033[H")
+    sys.stdout.flush()
+
+
+def get_terminal_width():
+    try:
+        return os.get_terminal_size().columns
+    except OSError:
+        return 80
+
+
+def prompt_input(hint=""):
+    """Fallback line input with a styled prompt."""
+    try:
+        return input(
+            f"  {c(C.CYAN + C.BOLD, '❯')} {c(C.DIM, hint + ' ') if hint else ''}"
+        ).strip()
+    except (EOFError, KeyboardInterrupt):
+        return "q"
+
+
+# ─── FZF ──────────────────────────────────────────────────────────────────────
+
+
+def find_fzf():
+    """Return True if fzf is available on PATH."""
+    try:
+        subprocess.run(["which", "fzf"], capture_output=True, check=True)
+        return True
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return False
+
+
+def fzf_pick(items, prompt="❯ ", header=None, height="50%", capture_query=False):
+    """
+    Present items in fzf. Returns chosen string or None (Esc / Ctrl-C).
+    items: list of plain or ANSI-colored strings.
+
+    capture_query=True: use --print-query so the typed query is always
+    returned on the first line even when no item was selected.
+    Returns (query, selection_or_None) when capture_query=True,
+    otherwise returns selection_or_None as a plain string.
+    """
+    if not items:
+        if capture_query:
+            return ("", None)
+        return None
+
+    cmd = [
+        "fzf",
+        "--ansi",
+        "--reverse",
+        "--no-multi",
+        "--no-info",
+        "--prompt",
+        prompt,
+        f"--height={height}",
+        "--margin=1,2",
+    ]
+    if header:
+        cmd += ["--header", header]
+    if capture_query:
+        cmd += ["--print-query"]
+
+    import tempfile
+
+    tmp_fd, tmp_path = tempfile.mkstemp()
+    os.close(tmp_fd)
+    try:
+        with open("/dev/tty", "rb+", buffering=0) as tty:
+            p = subprocess.Popen(
+                cmd,
+                stdin=subprocess.PIPE,
+                stdout=open(tmp_path, "w"),
+                stderr=tty,
+                text=True,
+            )
+            p.stdin.write("\n".join(items))
+            p.stdin.close()
+            p.wait()
+        with open(tmp_path, "r") as f:
+            stdout = f.read()
+        proc = type("R", (), {"returncode": p.returncode, "stdout": stdout})()
+    except FileNotFoundError:
+        os.unlink(tmp_path)
+        if capture_query:
+            return ("", None)
+        return None
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+
+    if capture_query:
+        lines = proc.stdout.splitlines()
+        query = lines[0] if lines else ""
+        if proc.returncode == 130:
+            return (query, None)
+        selected = lines[1] if len(lines) > 1 else None
+        return (query, selected)
+    else:
+        if proc.returncode == 0:
+            return proc.stdout.strip()
+        return None
+
+
+# ─── SHARED RENDERING HELPERS ─────────────────────────────────────────────────
+
+APP_NAME = "📺  news-stream"
+
+
+def render_stream_badge(stream):
+    if stream["is_live"]:
+        return C.LIVE
+    hrs = stream.get("hours_ago", 9999)
+    if hrs < 1:
+        label = "just now"
+    elif hrs < 2:
+        label = "1 hr ago"
+    else:
+        label = f"{int(hrs)} hrs ago"
+    return f"{C.RECENT} {c(C.YELLOW, label)}"
+
+
+def render_header(subtitle="", now_playing=None):
+    width = get_terminal_width()
+    time_str = datetime.now().strftime("%I:%M %p")
+    print()
+    print(
+        f"  {c(C.BOLD + C.CYAN, APP_NAME)}  {c(C.DIM, subtitle)}  {c(C.DIM, time_str)}"
+    )
+    if now_playing:
+        ticker = now_playing["title"][: width - 6]
+        print(f"  {C.LIVE}  {c(C.DIM, ticker)}")
+    print(c(C.DIM, "─" * width))
+    print()
+
+
+# ─── PICKERS ──────────────────────────────────────────────────────────────────
+
+
+def pick_source(sources, use_fzf):
+    """
+    Returns:
+        (key, info) tuple        — config source selected
+        ('search', query)        — free-text search requested
+        ('manage', None)         — manage sources screen requested
+        None                     — user quit (Esc on main menu)
+        'invalid'                — bad input, caller re-loops (plain mode only)
+    """
+    source_list = list(sources.items())
+
+    if use_fzf:
+        lines = [
+            f"{c(C.CYAN + C.BOLD, str(i) + '.')}  {info['name']}"
+            for i, (key, info) in enumerate(source_list, 1)
+        ]
+        MANAGE_SENTINEL = "manage sources"
+        lines.append(f"{c(C.CYAN + C.BOLD, '⚙')}   {MANAGE_SENTINEL}")
+
+        header = (
+            f"{APP_NAME}  —  select a source or type to search YouTube\n"
+            f"{'─' * 48}\n"
+            f"Esc → quit"
+        )
+        query, chosen = fzf_pick(
+            lines,
+            prompt="source ❯ ",
+            header=header,
+            height="60%",
+            capture_query=True,
+        )
+
+        # Esc / Ctrl-C with no query → quit
+        if chosen is None and not query.strip():
+            return None
+
+        # Something was selected from the list
+        if chosen is not None:
+            chosen_stripped = re.sub(r"\x1b\[[^m]*m", "", chosen).strip()
+
+            if MANAGE_SENTINEL in chosen_stripped:
+                return ("manage", None)
+
+            # Try to match numbered item
+            m = re.match(r"^\x1b\[[^m]*m(\d+)\.", chosen) or re.match(
+                r"^(\d+)\.", chosen
+            )
+            if m:
+                idx = int(m.group(1)) - 1
+                if 0 <= idx < len(source_list):
+                    return source_list[idx]
+
+        # Check if the query itself is the manage sources command
+        if query.strip().lower() in ("manage sources", "manage", "m"):
+            return ("manage", None)
+
+        # No match selected but user typed something → free-text search
+        if query.strip():
+            return ("search", query.strip())
+
+        return None
+
+    else:
+        clear_screen()
+        render_header("Select a source")
+        for i, (key, info) in enumerate(source_list, 1):
+            print(f"  {c(C.CYAN + C.BOLD, str(i) + '.')}  {info['name']}")
+        print()
+        print(f"  {c(C.DIM, '[m] manage sources   [q] quit')}")
+        print()
+        raw = prompt_input("number, [m]anage or [q]uit")
+        if raw.lower() in ("q", "x", ""):
+            return None
+        if raw.lower() == "m":
+            return ("manage", None)
+        if raw.isdigit() and 1 <= int(raw) <= len(source_list):
+            return source_list[int(raw) - 1]
+        # Treat non-numeric non-command input as a search query
+        if raw.strip():
+            return ("search", raw.strip())
+        return "invalid"
+
+
+def pick_stream(streams, source_name, use_fzf):
+    """
+    Returns:
+        stream dict   — user picked a stream
+        'retry'       — user wants to re-fetch
+        None          — user wants to go back / quit
+    """
+    if use_fzf:
+        if not streams:
+            # No streams — offer retry or back via fzf
+            header = f"{source_name}  —  no streams found\n{'─' * 40}"
+            chosen = fzf_pick(
+                ["retry", "back", "quit"],
+                prompt="action ❯ ",
+                header=header,
+                height="30%",
+            )
+            if chosen == "retry":
+                return "retry"
+            return None  # back or quit or Esc
+
+        # Build display lines keyed by index
+        lines = []
+        for i, stream in enumerate(streams, 1):
+            badge = render_stream_badge(stream)
+            views = (
+                f"  {c(C.DIM, '👥 ' + stream['view_count'])}"
+                if stream["view_count"]
+                else ""
+            )
+            lines.append(
+                f"{c(C.CYAN + C.BOLD, str(i) + '.')}  {badge}  {stream['title']}{views}"
+            )
+
+        header = (
+            f"{source_name}  —  {len(streams)} stream(s) found\n{'─' * 40}\nEsc → back"
+        )
+        chosen = fzf_pick(lines, prompt="stream ❯ ", header=header, height="60%")
+        if chosen is None:
+            return None  # Esc = back
+
+        m = re.match(r"^\x1b\[[^m]*m(\d+)\.", chosen) or re.match(r"^(\d+)\.", chosen)
+        if not m:
+            return None
+        idx = int(m.group(1)) - 1
+        if 0 <= idx < len(streams):
+            return streams[idx]
+        return None
+
+    else:
+        # Plain fallback
+        clear_screen()
+        render_header(f"Source: {source_name}")
+
+        if not streams:
+            print(f"  {c(C.YELLOW, '⚠')}  No streams found.\n")
+            print(f"  {c(C.DIM, '[r] retry   [b] back   [q] quit')}")
+            print()
+            raw = prompt_input("[r]etry / [b]ack / [q]uit").lower()
+            if raw == "r":
+                return "retry"
+            return None
+
+        for i, stream in enumerate(streams, 1):
+            badge = render_stream_badge(stream)
+            title = stream["title"][: get_terminal_width() - 10]
+            print(f"  {c(C.CYAN + C.BOLD, str(i) + '.')}  {badge}  {title}")
+            if stream["view_count"]:
+                print(f"       {c(C.DIM, '👥 ' + stream['view_count'])}")
+            print()
+
+        print(f"  {c(C.DIM, '[r] retry   [b] back   [q] quit')}")
+        print()
+        raw = prompt_input("number / [b]ack / [r]etry / [q]uit").lower()
+
+        if raw == "r":
+            return "retry"
+        if raw in ("b", "q", "x", ""):
+            return None
+        if raw.isdigit() and 1 <= int(raw) <= len(streams):
+            return streams[int(raw) - 1]
+        return "invalid"
+
+
+# Playing-screen action labels and their internal codes
+PLAY_ACTIONS = [
+    ("switch source", "s"),
+    ("other streams", "o"),
+    ("refresh", "r"),
+    ("change player", "p"),
+    ("quit player", "q"),
+    ("exit app", "x"),
+]
+
+
+def pick_playing_action(stream, player, quality, proc, use_fzf):
+    """
+    Returns one of: 's', 'o', 'r', 'q', 'x'
+    Esc maps to 'q' (quit player) in both modes.
+    """
+    crashed = proc is not None and proc.poll() is not None
+    status = C.LIVE if stream["is_live"] else render_stream_badge(stream)
+
+    if use_fzf:
+        header_lines = [
+            f"▶  {c(C.BOLD, stream['title'])}",
+            f"   {c(C.DIM, 'Source')}  : {stream['source']}",
+            f"   {c(C.DIM, 'Status')}  : {status}",
+            f"   {c(C.DIM, 'Quality')} : {quality}p  {c(C.DIM, 'Player')} : {player}",
+        ]
+        if crashed:
+            header_lines.append(
+                f"   {c(C.YELLOW, '⚠  Player exited — stream may have ended.')}"
+            )
+        header_lines.append("─" * 44)
+
+        labels = [label for label, _ in PLAY_ACTIONS]
+        chosen = fzf_pick(
+            labels,
+            prompt="action ❯ ",
+            header="\n".join(header_lines),
+            height="55%",
+        )
+        if chosen is None:
+            return "q"  # Esc = quit player
+        for label, code in PLAY_ACTIONS:
+            if chosen.strip() == label:
+                return code
+        return "q"
+
+    else:
+        clear_screen()
+        width = get_terminal_width()
+        sep = c(C.DIM, "─" * (width - 4))
+        render_header(now_playing=stream)
+        print(f"  {c(C.GREEN + C.BOLD, '▶  NOW PLAYING')}")
+        print(f"  {sep}")
+        print(f"  {c(C.BOLD, stream['title'])}")
+        print(f"  {c(C.DIM, 'Source')}  : {stream['source']}")
+        print(f"  {c(C.DIM, 'Status')}  : {status}")
+        print(f"  {c(C.DIM, 'Quality')} : {quality}p")
+        print(f"  {c(C.DIM, 'Player')}  : {player}")
+        print(f"  {sep}")
+        if crashed:
+            print(f"\n  {c(C.YELLOW, '⚠  Player exited.')} Stream may have ended.\n")
+        print()
+        print(f"  {c(C.DIM, '[s] switch source    [o] other streams')}")
+        print(f"  {c(C.DIM, '[r] refresh          [q] quit player')}")
+        print(f"  {c(C.DIM, '[x] exit app')}")
+        print()
+        raw = prompt_input("action").lower()
+        if raw in ("s", "o", "r", "q", "x"):
+            return raw
+        return "q"  # default / unrecognised
+
+
+def pick_player(current_player, use_fzf):
+    """Returns a player name string, or None if cancelled."""
+    players = list_players()
+    if not players:
+        return None
+
+    if use_fzf:
+        lines = [f"{'▶ ' if p == current_player else '  '}{p}" for p in players]
+        chosen = fzf_pick(
+            lines, prompt="player ❯ ", header=f"Select player\n{'─' * 44}", height="30%"
+        )
+        if chosen is None:
+            return None
+        # Strip the marker and whitespace
+        return chosen.strip().lstrip("▶").strip()
+    else:
+        clear_screen()
+        render_header("Select player")
+        for i, p in enumerate(players, 1):
+            marker = c(C.GREEN, "▶") if p == current_player else " "
+            print(f"  {marker} {c(C.CYAN + C.BOLD, str(i) + '.')}  {p}")
+        print()
+        raw = prompt_input("number or [b]ack").lower()
+        if raw in ("b", "q", ""):
+            return None
+        if raw.isdigit() and 1 <= int(raw) <= len(players):
+            return players[int(raw) - 1]
+        return None
+
+
+# ─── CONFIG WRITE HELPERS (raw text — preserves comments) ────────────────────
+
+
+def _config_raw():
+    """Return raw config file text, or empty string if missing."""
+    try:
+        return CONFIG_FILE.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return ""
+
+
+def _config_write(text):
+    """Write raw config text back to disk."""
+    CONFIG_FILE.write_text(text, encoding="utf-8")
+
+
+def _slugify(name):
+    """Turn a display name into a config key slug."""
+    slug = name.lower().strip()
+    slug = re.sub(r"[^\w\s-]", "", slug)
+    slug = re.sub(r"[\s_]+", "-", slug)
+    slug = re.sub(r"-+", "-", slug).strip("-")
+    return slug[:40]
+
+
+def config_add_source(name, keywords, channel_id=None, fallback_url=None):
+    """
+    Append a new [source.slug] block to the config file.
+    Preserves all existing content and comments.
+    Returns the slug used.
+    """
+    slug = _slugify(name)
+    raw = _config_raw()
+
+    # Avoid duplicates
+    if f"[source.{slug}]" in raw:
+        suffix = 1
+        while f"[source.{slug}-{suffix}]" in raw:
+            suffix += 1
+        slug = f"{slug}-{suffix}"
+
+    kw_str = ", ".join(keywords) if keywords else name.lower()
+    fallback = (
+        fallback_url
+        or f"https://www.youtube.com/results?search_query={urllib.parse.quote(name)}"
+    )
+    channel_str = channel_id or ""
+
+    block = (
+        f"\n[source.{slug}]\n"
+        f"name = {name}\n"
+        f"channel_id = {channel_str}\n"
+        f"keywords = {kw_str}\n"
+        f"fallback_url = {fallback}\n"
+        f"enabled = true\n"
+    )
+
+    _config_write(raw.rstrip() + "\n" + block)
+    return slug
+
+
+def config_delete_source(slug):
+    """
+    Remove a [source.slug] block from the config file entirely.
+    Preserves everything else including comments.
+    """
+    raw = _config_raw()
+    # Match from the section header to just before the next section or EOF
+    pattern = rf"\n?\[source\.{re.escape(slug)}\][^\[]*"
+    new_raw = re.sub(pattern, "", raw)
+    _config_write(new_raw)
+
+
+# ─── SEARCH CONFIRMATION ──────────────────────────────────────────────────────
+
+
+def confirm_search(query, use_fzf):
+    """
+    Show confirmation before running a free-text YouTube search.
+    Returns True (proceed) or False (cancel).
+    """
+    if use_fzf:
+        header = f"Search YouTube for:  {c(C.BOLD + C.CYAN, query)}\n{'─' * 44}"
+        chosen = fzf_pick(
+            ["yes, search", "no, go back"],
+            prompt="confirm ❯ ",
+            header=header,
+            height="25%",
+        )
+        return chosen is not None and chosen.startswith("yes")
+    else:
+        clear_screen()
+        render_header("Confirm search")
+        print(f"  Search YouTube for: {c(C.BOLD + C.CYAN, query)}\n")
+        raw = prompt_input("[y]es / [n]o").lower()
+        return raw in ("y", "yes")
+
+
+# ─── SAVE SOURCE PROMPT ───────────────────────────────────────────────────────
+
+
+def prompt_save_source(query, use_fzf):
+    """
+    After a free-text search, offer to save it as a config source.
+    Returns True if saved, False otherwise.
+    """
+    if use_fzf:
+        header = f'Save "{query}" as a permanent source?\n{"─" * 44}'
+        chosen = fzf_pick(
+            ["yes, save to config", "no, keep temporary"],
+            prompt="save ❯ ",
+            header=header,
+            height="25%",
+        )
+        if chosen is None or not chosen.startswith("yes"):
+            return False
+    else:
+        clear_screen()
+        render_header("Save source?")
+        print(f'  Save "{query}" as a permanent source? [y/n]\n')
+        raw = prompt_input("[y]es / [n]o").lower()
+        if raw not in ("y", "yes"):
+            return False
+
+    # Ask for display name (plain input either way — open-ended)
+    clear_screen()
+    render_header("Save source")
+    print(f'  {c(C.DIM, "Display name")} (Enter to use "{query}"):')
+    try:
+        name = input(f"  {c(C.CYAN + C.BOLD, '❯')} ").strip() or query
+    except (EOFError, KeyboardInterrupt):
+        return False
+
+    print(
+        f"\n  {c(C.DIM, 'Keywords, comma-separated')} (Enter to use name as keyword):"
+    )
+    try:
+        kw_raw = input(f"  {c(C.CYAN + C.BOLD, '❯')} ").strip()
+    except (EOFError, KeyboardInterrupt):
+        return False
+
+    keywords = (
+        [k.strip().lower() for k in kw_raw.split(",")] if kw_raw else [name.lower()]
+    )
+    slug = config_add_source(name, keywords)
+    print(f"\n  {c(C.GREEN, '✓')}  Saved as {c(C.CYAN, '[source.' + slug + ']')}")
+    import time
+
+    time.sleep(1)
+    return True
+
+
+# ─── MANAGE SOURCES SCREEN ────────────────────────────────────────────────────
+
+
+def get_all_sources_from_config():
+    """
+    Load ALL sources from config regardless of enabled flag.
+    Returns list of (slug, name, enabled) tuples preserving file order.
+    """
+    raw = _config_raw()
+    entries = []
+    current_slug = None
+    current_fields = {}
+
+    for line in raw.splitlines():
+        line = line.strip()
+        m = re.match(r"^\[source\.(.+)\]$", line)
+        if m:
+            if current_slug:
+                entries.append((current_slug, current_fields.copy()))
+            current_slug = m.group(1)
+            current_fields = {}
+        elif current_slug and "=" in line and not line.startswith("#"):
+            key, _, val = line.partition("=")
+            current_fields[key.strip()] = val.strip()
+
+    if current_slug:
+        entries.append((current_slug, current_fields.copy()))
+
+    result = []
+    for slug, fields in entries:
+        result.append(
+            {
+                "slug": slug,
+                "name": fields.get("name", slug),
+                "enabled": fields.get("enabled", "true").lower() == "true",
+            }
+        )
+    return result
+
+
+def config_toggle_source(slug, enable):
+    """Flip enabled = true/false for a source in raw config."""
+    raw = _config_raw()
+    # Find the section and replace its enabled line
+    pattern = rf"(\[source\.{re.escape(slug)}\][^\[]*?enabled\s*=\s*)(true|false)"
+    replacement = rf"\g<1>{'true' if enable else 'false'}"
+    new_raw = re.sub(pattern, replacement, raw, flags=re.DOTALL | re.IGNORECASE)
+    _config_write(new_raw)
+
+
+def manage_sources_screen(sources, use_fzf):
+    """
+    Two-level flow: pick a source → choose action (enable/disable/delete).
+    Loads ALL sources from config including disabled ones.
+    Returns updated enabled-sources dict.
+    """
+    while True:
+        all_sources = get_all_sources_from_config()
+
+        if not all_sources:
+            clear_screen()
+            render_header("Manage sources")
+            print(f"  {c(C.YELLOW, 'No sources defined.')}\n")
+            prompt_input("press enter to go back")
+            break
+
+        # ── LEVEL 1: pick a source ────────────────────────────────────────────
+        if use_fzf:
+            lines = []
+            for s in all_sources:
+                status = c(C.GREEN, "●") if s["enabled"] else c(C.DIM, "○")
+                lines.append(
+                    f"{status}  {s['name']}  {c(C.DIM, '[' + s['slug'] + ']')}"
+                )
+            header = f"Manage sources\n{'─' * 44}\nEsc → back"
+            chosen = fzf_pick(lines, prompt="source ❯ ", header=header, height="60%")
+            if chosen is None:
+                break
+
+            chosen_plain = re.sub(r"\x1b\[[^m]*m", "", chosen).strip()
+            target = None
+            for s in all_sources:
+                if f"[{s['slug']}]" in chosen_plain or s["name"] in chosen_plain:
+                    target = s
+                    break
+            if target is None:
+                continue
+
+        else:
+            clear_screen()
+            render_header("Manage sources")
+            for i, s in enumerate(all_sources, 1):
+                status = c(C.GREEN, "●") if s["enabled"] else c(C.DIM, "○")
+                print(
+                    f"  {c(C.CYAN + C.BOLD, str(i) + '.')}  {status}  {s['name']}  {c(C.DIM, '[' + s['slug'] + ']')}"
+                )
+            print()
+            print(f"  {c(C.DIM, '[b] back')}")
+            print()
+            raw = prompt_input("number or [b]ack").lower()
+            if raw in ("b", "q", "x", ""):
+                break
+            if not raw.isdigit() or not (1 <= int(raw) <= len(all_sources)):
+                continue
+            target = all_sources[int(raw) - 1]
+
+        # ── LEVEL 2: pick action for this source ──────────────────────────────
+        toggle_label = "disable" if target["enabled"] else "enable"
+
+        if use_fzf:
+            header = (
+                f"{'●' if target['enabled'] else '○'}  {target['name']}  [{target['slug']}]\n"
+                f"{'─' * 44}"
+            )
+            action = fzf_pick(
+                [toggle_label, "delete", "back"],
+                prompt="action ❯ ",
+                header=header,
+                height="30%",
+            )
+            if action is None or action == "back":
+                continue  # back to source list
+        else:
+            clear_screen()
+            render_header(f"Source: {target['name']}")
+            status = (
+                c(C.GREEN, "● enabled") if target["enabled"] else c(C.DIM, "○ disabled")
+            )
+            print(f"  {status}  {c(C.DIM, '[' + target['slug'] + ']')}\n")
+            print(f"  1. {toggle_label}")
+            print(f"  2. delete")
+            print()
+            print(f"  {c(C.DIM, '[b] back')}")
+            print()
+            raw = prompt_input("action or [b]ack").lower()
+            if raw in ("b", "q", "x", ""):
+                continue
+            if raw == "1":
+                action = toggle_label
+            elif raw == "2":
+                action = "delete"
+            else:
+                continue
+
+        # ── Execute action ────────────────────────────────────────────────────
+        if action == "delete":
+            # Confirm
+            if use_fzf:
+                confirm = fzf_pick(
+                    ["yes, delete", "no, keep"],
+                    prompt="confirm ❯ ",
+                    header=f'Delete "{target["name"]}"?\n{"─" * 44}',
+                    height="25%",
+                )
+                confirmed = confirm is not None and confirm.startswith("yes")
+            else:
+                clear_screen()
+                render_header("Confirm delete")
+                print(f'  Delete "{target["name"]}"? [y/n]\n')
+                confirmed = prompt_input("[y]es / [n]o").lower() in ("y", "yes")
+
+            if confirmed:
+                config_delete_source(target["slug"])
+                print(f"\n  {c(C.GREEN, '✓')}  Deleted {c(C.CYAN, target['name'])}")
+                import time
+
+                time.sleep(0.8)
+
+        elif action in ("enable", "disable"):
+            config_toggle_source(target["slug"], enable=(action == "enable"))
+            state = (
+                c(C.GREEN, "enabled") if action == "enable" else c(C.DIM, "disabled")
+            )
+            print(f"\n  {c(C.GREEN, '✓')}  {target['name']} is now {state}")
+            import time
+
+            time.sleep(0.8)
+
+    # Reload enabled sources for the main menu
+    try:
+        return get_sources(load_config())
+    except Exception:
+        return sources
+
+
+# ─── INTERACTIVE MODE ─────────────────────────────────────────────────────────
+
+
+def run_interactive(settings, sources):
+    """Main TUI loop — fzf-aware."""
+
+    use_fzf = find_fzf()
+    player_proc = None
+    current_stream = None
+
+    def stop_player():
+        nonlocal player_proc
+        kill_player(player_proc)
+        player_proc = None
+
+    def play(stream, player, quality):
+        nonlocal player_proc, current_stream
+        stop_player()
+        clear_screen()
+        sp = Spinner('Tuning in to stream...')
+        sp._thread.start()
+        direct_url = get_direct_stream_url(stream['url'], quality)
+        if direct_url:
+            sp.done('On air')
+        else:
+            sp.fail('Resolving failed — using direct URL')
+        url = direct_url or stream['url']
+        player_proc = launch_player(url, player, quality)
+        current_stream = stream
+
+    def goodbye():
+        stop_player()
+        print(f"\n  {c(C.DIM, 'Goodbye! 👋')}\n")
+
+    def resolve_player():
+        """Return player name or None."""
+        p = settings["player"]
+        if p == "auto":
+            p = detect_player()
+        return p
+
+    if use_fzf:
+        print(f"  {c(C.DIM, 'fzf detected — using fzf interface')}")
+    else:
+        print(
+            f"  {c(C.DIM, 'fzf not found — using plain menu (install fzf for better UX)')}"
+        )
+
+    # ── MAIN MENU LOOP ────────────────────────────────────────────────────────
+    while True:
+        result = pick_source(sources, use_fzf)
+
+        # ── Quit ──────────────────────────────────────────────────────────────
+        if result is None:
+            goodbye()
+            return
+
+        if result == "invalid":
+            continue
+
+        # ── Manage sources ────────────────────────────────────────────────────
+        if result == ("manage", None):
+            sources = manage_sources_screen(sources, use_fzf)
+            continue
+
+        # ── Free-text search ──────────────────────────────────────────────────
+        if isinstance(result, tuple) and result[0] == "search":
+            query = result[1]
+
+            if not confirm_search(query, use_fzf):
+                continue  # user said no → back to main menu
+
+            # Build a temporary ad-hoc source for this query
+            source_info = {
+                "name": query,
+                "channel_id": None,
+                "keywords": [w.lower() for w in query.split()],
+                "fallback_url": f"https://www.youtube.com/results?search_query={urllib.parse.quote(query)}",
+            }
+            is_search_result = True
+
+        else:
+            # ── Config source selected ────────────────────────────────────────
+            source_key, source_info = result
+            is_search_result = False
+
+        # ── SOURCE LOOP (re-fetch on retry) ──────────────────────────────────
+        while True:
+            clear_screen()
+            render_header(f"Searching: {source_info['name']}")
+            print()
+            sp = Spinner('Scanning for live streams...')
+            sp._thread.start()
+            cached_streams = search_youtube(
+                source_info["name"],
+                source_info["keywords"],
+                source_info.get("channel_id"),
+                settings["timeout"],
+                settings["recent_hours"],
+            )
+            if cached_streams:
+                sp.done(f"Found {len(cached_streams)} stream(s)")
+            else:
+                sp.fail("No streams found")
+            print()
+
+            # ── STREAM LIST LOOP ──────────────────────────────────────────────
+            go_back_to_main = False
+
+            while True:
+                result = pick_stream(cached_streams, source_info["name"], use_fzf)
+
+                if result is None:
+                    go_back_to_main = True
+                    break
+
+                if result == "retry":
+                    break  # re-fetch in source loop
+
+                if result == "invalid":
+                    continue
+
+                # ── A STREAM WAS CHOSEN ───────────────────────────────────────
+                chosen = result
+                player = resolve_player()
+                if not player:
+                    clear_screen()
+                    print(
+                        f"\n  {c(C.RED, '❌ No player found (mpv / vlc / ffplay).')}\n"
+                    )
+                    prompt_input("press enter to go back")
+                    go_back_to_main = True
+                    break
+
+                play(chosen, player, settings["quality"])
+
+                # ── PLAYING LOOP ──────────────────────────────────────────────
+                go_to_main_from_playing = False
+                refetch_from_playing = False
+
+                while True:
+                    action = pick_playing_action(
+                        current_stream,
+                        player,
+                        settings["quality"],
+                        player_proc,
+                        use_fzf,
+                    )
+
+                    if action == "s":
+                        stop_player()
+                        go_to_main_from_playing = True
+                        break
+
+                    elif action == "o":
+                        # Back to stream list, no re-fetch, stream keeps playing
+                        break
+
+                    elif action == "r":
+                        stop_player()
+                        refetch_from_playing = True
+                        break
+
+                    elif action == "p":
+                        new_player = pick_player(player, use_fzf)
+                        if new_player and new_player != player:
+                            player = new_player
+                            settings["player"] = new_player
+                            play(chosen, player, settings["quality"])
+
+                    elif action == "q":
+                        stop_player()
+                        break
+
+                    elif action == "x":
+                        goodbye()
+                        return
+
+                # After playing: offer to save if this was a free-text search
+                if is_search_result and (
+                    go_to_main_from_playing or action in ("q", "r")
+                ):
+                    saved = prompt_save_source(source_info["name"], use_fzf)
+                    if saved:
+                        # Reload sources so new entry appears in menu
+                        try:
+                            sources = get_sources(load_config())
+                        except Exception:
+                            pass
+                        is_search_result = False  # don't prompt again this session
+
+                if go_to_main_from_playing:
+                    go_back_to_main = True
+                    break
+
+                if refetch_from_playing:
+                    break
+
+                # action 'o' or 'q': stay in stream list loop
+
+            if go_back_to_main:
+                break  # source loop → main menu
+
+            # retry or refetch: loop source loop again
+
+
+# ─── CLI (legacy) MODE ────────────────────────────────────────────────────────
+
+
+def play_stream_cli(url, player=None, quality="720"):
+    if not player or player == "auto":
+        player = detect_player()
+        if not player:
+            print("❌ No suitable player found (mpv, vlc, or ffplay)")
+            return False
+    print(f"▶️  Playing with {player}...")
+    try:
+        if player == "mpv":
+            cmd = [
+                "mpv",
+                "--fs",
+                "--really-quiet",
+                f"--ytdl-format=best[height<={quality}]/best",
+                url,
+            ]
+        elif player == "vlc":
+            cmd = ["vlc", url, "--fullscreen"]
+        elif player == "ffplay":
+            cmd = ["ffplay", "-fs", "-window_title", "News Stream", url]
+        else:
+            cmd = [player, url]
+        subprocess.run(cmd)
+        return True
+    except Exception as e:
+        print(f"❌ Error playing stream: {e}")
+        return False
+
+
+def print_help(sources):
+    print(f"""
+📺 NEWS-STREAM: Configurable Filipino News Live Stream Finder
+
+CONFIG: {CONFIG_FILE}
+
+USAGE:
+    news-stream                   Interactive TUI mode
+    news-stream <source> [player] Play directly (CLI mode)
+    news-stream --list
+    news-stream --config
+    news-stream --help
+
+SUPPORTED SOURCES:""")
+    for key, info in sorted(sources.items()):
+        print(f"    {'✓' if info['enabled'] else '✗'}  {key:<25} - {info['name']}")
+    print(f"""
+PLAYERS:
+    auto  mpv  vlc  ffplay
+
+EXAMPLES:
+    news-stream                   # interactive
+    news-stream tv-patrol
+    news-stream 24-oras vlc
+""")
+
+
+def edit_config():
+    editor = os.environ.get("EDITOR", "nano")
+    subprocess.run([editor, str(CONFIG_FILE)])
+
+
+# ─── ENTRY POINT ──────────────────────────────────────────────────────────────
+
+
+def main():
+    is_new = init_config()
+    if is_new:
+        print(f"📝 Created default config: {CONFIG_FILE}")
+        print("Run 'news-stream' to start or edit the config first.\n")
+        sys.exit(0)
+
+    try:
+        config = load_config()
+        sources = get_sources(config)
+        settings = {
+            "player": config.get("settings", "player", fallback="auto"),
+            "quality": config.get("settings", "quality", fallback="720"),
+            "timeout": config.getint("settings", "timeout", fallback=15),
+            "recent_hours": config.getint("settings", "recent_hours", fallback=24),
+        }
+    except Exception as e:
+        print(f"❌ Error loading config: {e}")
+        sys.exit(1)
+
+    args = sys.argv[1:]
+
+    # ── No args → interactive TUI ─────────────────────────────────────────────
+    if not args:
+        run_interactive(settings, sources)
+        return
+
+    # ── CLI flags ─────────────────────────────────────────────────────────────
+    if args[0] in ("--help", "-h", "help"):
+        print_help(sources)
+        sys.exit(0)
+
+    if args[0] in ("--list", "-l", "list"):
+        print("\n📡 AVAILABLE NEWS SOURCES:")
+        print("-" * 60)
+        for key, info in sorted(sources.items()):
+            status = "🟢" if info["enabled"] else "🔴"
+            print(f"  {status} {key:<25} - {info['name']}")
+        print("-" * 60)
+        sys.exit(0)
+
+    if args[0] in ("--config", "-c", "config", "--edit"):
+        edit_config()
+        sys.exit(0)
+
+    # ── CLI direct-play mode (original behaviour) ─────────────────────────────
+    source_query = args[0].lower()
+    player_override = None
+    quality = settings["quality"]
+
+    for arg in args[1:]:
+        if arg.startswith("--quality="):
+            quality = arg.split("=")[1]
+        elif arg in ("mpv", "vlc", "ffplay", "auto"):
+            player_override = arg
+
+    matched = None
+    for key, info in sources.items():
+        if source_query == key:
+            matched = info
+            break
+        if (
+            source_query in key
+            or key in source_query
+            or source_query in info["name"].lower()
+        ):
+            matched = info
+
+    if not matched:
+        print(f"❌ Unknown source: '{source_query}'")
+        suggestions = [
+            k
+            for k in sources
+            if any(p in k for p in source_query.replace("-", " ").split())
+        ]
+        if suggestions:
+            print("Did you mean: " + ", ".join(suggestions[:4]))
+        sys.exit(1)
+
+    print(f"\n📺 Searching for: {matched['name']}")
+    streams = search_youtube(
+        matched["name"],
+        matched["keywords"],
+        matched.get("channel_id"),
+        settings["timeout"],
+        settings["recent_hours"],
+    )
+
+    if not streams:
+        print(f"⚠️  No streams found. Try: {matched['fallback_url']}")
+        sys.exit(0)
+
+    stream = streams[0]
+    direct_url = get_direct_stream_url(stream["url"], quality)
+    player = player_override or settings["player"]
+    play_stream_cli(direct_url or stream["url"], player, quality)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\n\n👋 Goodbye!")
+        sys.exit(0)
+    except Exception as e:
+        print(f"\n❌ Error: {e}")
+        import traceback
+
+        traceback.print_exc()
+        sys.exit(1)

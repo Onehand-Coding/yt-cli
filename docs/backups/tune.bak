@@ -1,0 +1,1434 @@
+#!/usr/bin/env python3
+"""
+tune: Music preset player with fzf TUI
+Drop-in replacement for play-url with news-stream-style interface.
+
+Usage:
+    tune                        Interactive TUI
+    tune <preset|url> [opts]    Direct play (CLI mode)
+    tune --list                 List presets
+    tune --config               Edit config
+    tune --help
+
+Symlink support: ln -s $(which tune) ~/.local/bin/music/linkin-park
+"""
+
+import urllib.request
+import urllib.error
+import urllib.parse
+import json
+import html
+import re
+import sys
+import subprocess
+import os
+import signal
+import configparser
+import tempfile
+from pathlib import Path
+from datetime import datetime
+import threading
+import socket as _socket
+import time
+
+# ─── ANSI ─────────────────────────────────────────────────────────────────────
+
+class C:
+    RESET   = "\033[0m"
+    BOLD    = "\033[1m"
+    DIM     = "\033[2m"
+    RED     = "\033[31m"
+    GREEN   = "\033[32m"
+    YELLOW  = "\033[33m"
+    BLUE    = "\033[34m"
+    MAGENTA = "\033[35m"
+    CYAN    = "\033[36m"
+    WHITE   = "\033[37m"
+    PLAY    = f"\033[32m▶\033[0m"
+    STOPPED = f"\033[31m■\033[0m"
+    SEARCH  = f"\033[33m🔍\033[0m"
+
+def c(color, text):
+    return f"{color}{text}{C.RESET}"
+
+# ─── DEFAULT CONFIG ───────────────────────────────────────────────────────────
+
+DEFAULT_CONFIG = """[settings]
+# Default video player
+player = mpv
+
+# Suppress video window by default
+# false = let mpv.conf decide (recommended — your mpv.conf handles force-window etc.)
+# true  = always force --no-video --force-window=no
+no_video = false
+
+# Loop playlist by default (true/false)
+loop = false
+
+# Run in background by default (true/false)
+background = false
+
+# ─── PRESETS ──────────────────────────────────────────────────────────────────
+# Each preset has:
+#   name     = Display name
+#   url      = YouTube or stream URL
+#   category = Group in TUI menu
+#   loop     = true/false (overrides global default)
+#   no_video = true/false (true = force audio-only, overrides global)
+#   radio    = true/false (seed YouTube radio mix from URL)
+#   enabled  = true/false
+
+[preset.my-radio]
+name = My Radio
+url = https://music.youtube.com/watch?v=-B2yzG6Gj0A&list=RDATg6X
+category = Radio
+radio = true
+loop = false
+enabled = true
+
+[preset.alt-rock]
+name = Alt Rock
+url = https://www.youtube.com/watch?v=RvnkAtWcKYg&list=RDRvnkAtWcKYg
+category = Genres
+enabled = true
+
+[preset.metal]
+name = Metal
+url = https://www.youtube.com/watch?v=-B2yzG6Gj0A&list=RDEMgJFYLuS9xp4-31krCadeUg
+category = Genres
+enabled = true
+
+[preset.metalcore]
+name = Metalcore
+url = https://music.youtube.com/watch?v=qnkuBUAwfe0&list=RDATfibWV0YWxjb3Jl
+category = Genres
+enabled = true
+
+[preset.nu-metal]
+name = Nu Metal
+url = https://music.youtube.com/watch?v=XlqkG4XD2ok&list=RDATfhbnUgbWV0YWw
+category = Genres
+enabled = true
+
+[preset.post-hardcore]
+name = Post Hardcore
+url = https://music.youtube.com/watch?v=IHgFJEJgUrg&list=RDATfocG9zdCBoYXJkY29yZQ
+category = Genres
+enabled = true
+
+[preset.pop-punk]
+name = Pop Punk
+url = https://music.youtube.com/watch?v=0bwWy67MsOU&list=RDATfhcG9wIHB1bms
+category = Genres
+enabled = true
+
+[preset.grunge]
+name = Grunge
+url = https://music.youtube.com/watch?v=m02-RHN_hQE&list=RDATfeZ3J1bmdl
+category = Genres
+enabled = true
+
+[preset.emo]
+name = Emo Rock
+url = https://music.youtube.com/watch?v=hPC2Fp7IT7o&list=RDATfaZW1v
+category = Genres
+enabled = true
+
+[preset.opm-rock]
+name = OPM Rock
+url = https://www.youtube.com/watch?v=R2_L8nddBwo&list=PLlZy1LqcuJriBkUfuJHSgGf6pSp3AGZz9
+category = OPM
+enabled = true
+
+[preset.pinoy-rock]
+name = Pinoy Rock Classics
+url = https://music.youtube.com/watch?v=TSfXeEodCTw&list=RDCLAK5uy_loo-8N6E9gYLKQCNNwIbYQj8HH7lV1TfE
+category = OPM
+enabled = true
+
+[preset.pinoy-punk]
+name = Pinoy Punk
+url = https://music.youtube.com/watch?v=1yBbf9bApLU&list=PLSehaPZNWyT_UnaPLmXuRg-UKbx7QaInj
+category = OPM
+enabled = true
+
+[preset.chill]
+name = Chill
+url = https://www.youtube.com/watch?v=jfKfPfyJRdk&list=PLOHoVaTp8R7dT8KNSTsa3LJLcZ6KoqHfO
+category = Chill
+enabled = true
+
+[preset.lofi]
+name = Lo-Fi
+url = https://www.youtube.com/watch?v=jfKfPfyJRdk
+category = Chill
+enabled = true
+
+[preset.jazz]
+name = Jazz
+url = https://www.youtube.com/watch?v=Dx5qFachd3A
+category = Chill
+loop = true
+enabled = true
+
+[preset.a7x]
+name = Avenged Sevenfold
+url = https://music.youtube.com/watch?v=krQAtmz4apw&list=RDAOgJFYLuS9xp4-31krCadeUg
+category = Bands
+enabled = true
+
+[preset.bfmv]
+name = Bullet For My Valentine
+url = https://music.youtube.com/watch?v=bAaRP2sCjyc&list=RDAOBKrRqkJBrtYWVB7fzbBviQ
+category = Bands
+enabled = true
+
+[preset.linkin-park]
+name = Linkin Park
+url = https://music.youtube.com/watch?v=BLZWkjBXfN8&list=RDAOww6ZEHgLhQ-8eu_x7Z-FJw
+category = Bands
+enabled = true
+
+[preset.breaking-benjamin]
+name = Breaking Benjamin
+url = https://music.youtube.com/watch?v=xAHhHQkyk0A&list=RDAO7Gsu8IvvUw8CkkAgI8WQOw
+category = Bands
+enabled = true
+
+[preset.metallica]
+name = Metallica
+url = https://music.youtube.com/watch?v=FiyG2Mh80tI&list=RDAOAkKpoB62G5Wmtp0nQxfrDg
+category = Bands
+enabled = true
+
+[preset.nirvana]
+name = Nirvana
+url = https://music.youtube.com/watch?v=ljUtuoFt-8c&list=RDAODz952MrmDXLULMlo7SEXUw
+category = Bands
+enabled = true
+
+[preset.slipknot]
+name = Slipknot
+url = https://music.youtube.com/watch?v=mQxWYy1JaqU&list=RDAOuNoGZsKwOtmFzJbaW5DEFA
+category = Bands
+enabled = true
+
+[preset.disturbed]
+name = Disturbed
+url = https://music.youtube.com/watch?v=_gRsZqSNvKU&list=RDAOU5X5llIz9gVZkJCH9rptsA
+category = Bands
+enabled = true
+
+[preset.mcr]
+name = My Chemical Romance
+url = https://music.youtube.com/watch?v=a_1tA0bpDQs&list=RDAOyz_uxnSDU7QK1tfMcE_p4Q
+category = Bands
+enabled = true
+
+[preset.simple-plan]
+name = Simple Plan
+url = https://music.youtube.com/watch?v=sbssoNiL-qk&list=RDAOgYaXXXM15q6ViPB6txLRhw
+category = Bands
+enabled = true
+
+[preset.parokya]
+name = Parokya ni Edgar
+url = https://music.youtube.com/watch?v=o2FZEQyw__c&list=RDAOUVjUF0um2j0RkpAjJH35Yw
+category = OPM Bands
+enabled = true
+
+[preset.kamikazee]
+name = Kamikazee
+url = https://music.youtube.com/watch?v=N9GpzBrGxgg&list=RDAO64I9Oo9kqWsBwh4eNUfawA
+category = OPM Bands
+enabled = true
+
+[preset.eraserheads]
+name = Eraserheads
+url = https://music.youtube.com/watch?v=LNJtyPoB_Qc&list=RDAObQJjNtLQ6TooBiJUlg6Iiw
+category = OPM Bands
+enabled = true
+
+[preset.siakol]
+name = Siakol
+url = https://music.youtube.com/watch?v=iE3mRENrmZg&list=RDAOygKOQpLJ8KNZZBeEeNMdOw
+category = OPM Bands
+enabled = true
+
+[preset.6cyclemind]
+name = 6cyclemind
+url = https://music.youtube.com/watch?v=GUdgFqMn7qo&list=RDAOvWkGLAE7ZzZeeLulR0ONOw
+category = OPM Bands
+enabled = true
+
+[preset.rivermaya]
+name = Rivermaya
+url = https://music.youtube.com/watch?v=OC-QonyUlU8&list=RDAOw4-l9RTyEGP_IeS6xs7xBA
+category = OPM Bands
+enabled = true
+
+[preset.cueshe]
+name = Cueshe
+url = https://music.youtube.com/watch?v=D7oB6CLh8eU&list=RDAOKhs5hhspoKAF-vM4d-g6sg
+category = OPM Bands
+enabled = true
+
+[preset.orient-pearl]
+name = Orient Pearl
+url = https://music.youtube.com/watch?v=BC4GS7y9aWk&list=RDAOwStcN9dMDf7nSC3F7ibAtw
+category = OPM Bands
+enabled = true
+"""
+
+CONFIG_DIR  = Path.home() / ".config" / "tune"
+CONFIG_FILE = CONFIG_DIR / "config.ini"
+LEGACY_FILE = Path.home() / ".music-urls"
+
+APP_NAME   = "🎵  tune"
+IPC_SOCKET = "/tmp/mpvsocket"
+
+# ─── IPC WATCHER ──────────────────────────────────────────────────────────────
+
+def _ipc_watch(name, session_id, done):
+    sys.stdout.write("\r" + " " * 60 + "\r")
+    sys.stdout.flush()
+
+    SPINNER       = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+    spinner_label = ["Resolving..."]
+    spinner_stop  = threading.Event()
+
+    def spin():
+        time.sleep(0.15)  # let fzf open first
+        i = 0
+        while not spinner_stop.is_set():
+            frame = SPINNER[i % len(SPINNER)]
+            sys.stdout.write(f"\r  {c(C.CYAN, frame)}  {c(C.DIM, spinner_label[0])}      ")
+            sys.stdout.flush()
+            time.sleep(0.1)
+            i += 1
+
+    spin_thread = threading.Thread(target=spin, daemon=True)
+    spin_thread.start()
+
+    time.sleep(0.3)  # give mpv time to bind socket
+
+    deadline = time.time() + 60
+    sock     = None
+
+    while time.time() < deadline:
+        if done.is_set():
+            spinner_stop.set()
+            return
+        try:
+            sock = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
+            sock.connect(IPC_SOCKET)
+            break
+        except (ConnectionRefusedError, FileNotFoundError, OSError):
+            time.sleep(0.2)
+    else:
+        spinner_stop.set()
+        return
+
+    sock.settimeout(1.0)
+    buf               = ""
+    deadline_evt      = time.time() + 60
+
+    try:
+        while not done.is_set() and time.time() < deadline_evt:
+            try:
+                chunk = sock.recv(4096).decode("utf-8", errors="ignore")
+            except _socket.timeout:
+                continue
+            if not chunk:
+                break
+
+            buf  += chunk
+            lines = buf.split("\n")
+            buf   = lines[-1]
+
+            for line in lines[:-1]:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    evt = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+
+                event = evt.get("event", "")
+
+                if event == "file-loaded":
+                    spinner_label[0] = "Buffering..."
+
+                elif event == "playback-restart":
+                    spinner_stop.set()
+                    spin_thread.join()
+                    sys.stdout.write(
+                        f"\r  {C.PLAY}  {c(C.BOLD, name)}  {c(C.GREEN, 'playing')}      "
+                    )
+                    sys.stdout.flush()
+                    return
+
+                elif event == "end-file":
+                    reason = evt.get("reason", "")
+                    if reason == "error":
+                        spinner_stop.set()
+                        spin_thread.join()
+                        sys.stdout.write(f"\r  {c(C.RED, '✗  Failed to load')}      \n")
+                        sys.stdout.flush()
+                        return
+
+        # No confirmation within the deadline — assume playback started.
+        spinner_stop.set()
+        spin_thread.join()
+        sys.stdout.write(
+            f"\r  {C.PLAY}  {c(C.BOLD, name)}  {c(C.GREEN, 'playing')}      "
+        )
+        sys.stdout.flush()
+    except Exception:
+        pass
+    finally:
+        spinner_stop.set()
+        try:
+            sock.close()
+        except Exception:
+            pass
+
+# ─── CONFIG ───────────────────────────────────────────────────────────────────
+
+def init_config():
+    if not CONFIG_DIR.exists():
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    if not CONFIG_FILE.exists():
+        CONFIG_FILE.write_text(DEFAULT_CONFIG, encoding="utf-8")
+        return True
+    return False
+
+def load_config():
+    cfg = configparser.ConfigParser()
+    cfg.read(CONFIG_FILE)
+    return cfg
+
+def get_presets(config):
+    presets = {}
+    for section in config.sections():
+        if not section.startswith("preset."):
+            continue
+        if not config.getboolean(section, "enabled", fallback=True):
+            continue
+        slug = section[len("preset."):]
+        presets[slug] = {
+            "name":             config.get(section, "name",     fallback=slug),
+            "url":              config.get(section, "url",      fallback=""),
+            "category":         config.get(section, "category", fallback="Uncategorized"),
+            "loop":             config.getboolean(section, "loop",     fallback=False),
+            "no_video":         config.getboolean(section, "no_video", fallback=False),
+            "radio":            config.getboolean(section, "radio",    fallback=False),
+            "enabled":          True,
+            "is_search_result": False,
+        }
+    return presets
+
+def get_settings(config):
+    return {
+        "player":     config.get       ("settings", "player",     fallback="mpv"),
+        "no_video":   config.getboolean("settings", "no_video",   fallback=False),
+        "loop":       config.getboolean("settings", "loop",       fallback=False),
+        "background": config.getboolean("settings", "background", fallback=False),
+    }
+
+# ─── CONFIG RAW WRITE HELPERS ─────────────────────────────────────────────────
+
+def _config_raw():
+    try:
+        return CONFIG_FILE.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return ""
+
+def _config_write(text):
+    CONFIG_FILE.write_text(text, encoding="utf-8")
+
+def _slugify(name):
+    slug = name.lower().strip()
+    slug = re.sub(r"[^\w\s-]", "", slug)
+    slug = re.sub(r"[\s_]+", "-", slug)
+    slug = re.sub(r"-+", "-", slug).strip("-")
+    return slug[:40]
+
+def config_add_preset(name, url, category="Search", loop=False, no_video=False, radio=False):
+    slug = _slugify(name)
+    raw  = _config_raw()
+    if f"[preset.{slug}]" in raw:
+        i = 1
+        while f"[preset.{slug}-{i}]" in raw:
+            i += 1
+        slug = f"{slug}-{i}"
+    block = (
+        f"\n[preset.{slug}]\n"
+        f"name = {name}\n"
+        f"url = {url}\n"
+        f"category = {category}\n"
+        f"loop = {'true' if loop else 'false'}\n"
+        f"no_video = {'true' if no_video else 'false'}\n"
+        f"radio = {'true' if radio else 'false'}\n"
+        f"enabled = true\n"
+    )
+    _config_write(raw.rstrip() + "\n" + block)
+    return slug
+
+def config_delete_preset(slug):
+    raw     = _config_raw()
+    pattern = rf"\[preset\.{re.escape(slug)}\][^\[]*\n?"
+    _config_write(re.sub(pattern, "", raw))
+
+def config_toggle_preset(slug, enable):
+    raw     = _config_raw()
+    pattern = rf"(\[preset\.{re.escape(slug)}\][^\[]*?enabled\s*=\s*)(true|false)"
+    replace = rf"\g<1>{'true' if enable else 'false'}"
+    _config_write(re.sub(pattern, replace, raw, flags=re.DOTALL | re.IGNORECASE))
+
+def get_all_presets_from_config():
+    raw     = _config_raw()
+    entries = []
+    current_slug   = None
+    current_fields = {}
+    for line in raw.splitlines():
+        line = line.strip()
+        m = re.match(r"^\[preset\.(.+)\]$", line)
+        if m:
+            if current_slug:
+                entries.append((current_slug, current_fields.copy()))
+            current_slug   = m.group(1)
+            current_fields = {}
+        elif current_slug and "=" in line and not line.startswith("#"):
+            k, _, v = line.partition("=")
+            current_fields[k.strip()] = v.strip()
+    if current_slug:
+        entries.append((current_slug, current_fields.copy()))
+    result = []
+    for slug, fields in entries:
+        result.append({
+            "slug":     slug,
+            "name":     fields.get("name", slug),
+            "category": fields.get("category", "Uncategorized"),
+            "url":      fields.get("url", ""),
+            "enabled":  fields.get("enabled", "true").lower() == "true",
+        })
+    return result
+
+# ─── YOUTUBE / YTM SEARCH ─────────────────────────────────────────────────────
+
+def _fetch(url, timeout=12):
+    headers = {
+        "User-Agent":      ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                            "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"),
+        "Accept-Language": "en-US,en;q=0.5",
+    }
+    try:
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return r.read().decode("utf-8", errors="ignore")
+    except Exception:
+        return ""
+
+def _extract_initial_data(page):
+    for pat in [
+        r"var ytInitialData = ({.*?});</script>",
+        r'window\["ytInitialData"\] = ({.*?});',
+        r"ytInitialData\s*=\s*({.*?});",
+    ]:
+        m = re.search(pat, page, re.DOTALL)
+        if m:
+            try:
+                return json.loads(m.group(1))
+            except json.JSONDecodeError:
+                continue
+    return None
+
+def _text(obj):
+    if not obj:
+        return ""
+    if "simpleText" in obj:
+        return obj["simpleText"]
+    return "".join(r.get("text", "") for r in obj.get("runs", []))
+
+def _parse_ytm_results(data):
+    results = []
+    try:
+        tabs = (data.get("contents", {})
+                    .get("tabbedSearchResultsRenderer", {})
+                    .get("tabs", []))
+        for tab in tabs:
+            sections = (tab.get("tabRenderer", {})
+                           .get("content", {})
+                           .get("sectionListRenderer", {})
+                           .get("contents", []))
+            for section in sections:
+                shelf       = section.get("musicShelfRenderer", {})
+                shelf_title = _text(shelf.get("title", {})).lower()
+                for item in shelf.get("contents", []):
+                    r = item.get("musicResponsiveListItemRenderer", {})
+                    if not r:
+                        continue
+                    flex  = r.get("flexColumns", [])
+                    title = (_text(flex[0].get("musicResponsiveListItemFlexColumnRenderer", {})
+                                          .get("text", {})) if flex else "")
+                    if not title:
+                        continue
+                    ne  = r.get("navigationEndpoint", {})
+                    wne = ne.get("watchEndpoint") or ne.get("browseEndpoint") or {}
+                    url = ""
+                    if "videoId" in wne:
+                        vid = wne["videoId"]
+                        lid = wne.get("playlistId", "")
+                        url = (f"https://music.youtube.com/watch?v={vid}&list={lid}"
+                               if lid else f"https://music.youtube.com/watch?v={vid}")
+                    elif "browseId" in wne:
+                        url = f"https://music.youtube.com/browse/{wne['browseId']}"
+                    if not url:
+                        continue
+                    subtitle   = " ".join(
+                        _text(col.get("musicResponsiveListItemFlexColumnRenderer", {}).get("text", {}))
+                        for col in flex[1:]
+                    ).lower()
+                    type_label = "ytmusic"
+                    for kw, label in [
+                        ("playlist", "playlist/mix"), ("mix", "playlist/mix"),
+                        ("radio",    "playlist/mix"), ("album", "album"),
+                        ("artist",   "artist"),       ("song",  "song"),
+                    ]:
+                        if kw in shelf_title or kw in subtitle:
+                            type_label = label
+                            break
+                    results.append({
+                        "title":      html.unescape(title),
+                        "url":        url,
+                        "type_label": type_label,
+                        "source":     "YouTube Music",
+                    })
+    except Exception:
+        pass
+    return results
+
+def _parse_yt_results(data):
+    results = []
+    try:
+        contents = (data.get("contents", {})
+                        .get("twoColumnSearchResultsRenderer", {})
+                        .get("primaryContents", {})
+                        .get("sectionListRenderer", {})
+                        .get("contents", []))
+        for section in contents:
+            for item in section.get("itemSectionRenderer", {}).get("contents", []):
+                vr = item.get("videoRenderer", {})
+                if vr:
+                    vid   = vr.get("videoId", "")
+                    title = _text(vr.get("title", {}))
+                    if vid and title:
+                        results.append({"title": html.unescape(title),
+                                        "url": f"https://www.youtube.com/watch?v={vid}",
+                                        "type_label": "video", "source": "YouTube"})
+                pr = item.get("playlistRenderer", {})
+                if pr:
+                    lid   = pr.get("playlistId", "")
+                    title = _text(pr.get("title", {}))
+                    if lid and title:
+                        results.append({"title": html.unescape(title),
+                                        "url": f"https://www.youtube.com/playlist?list={lid}",
+                                        "type_label": "playlist", "source": "YouTube"})
+                rr = item.get("radioRenderer", {})
+                if rr:
+                    lid   = rr.get("playlistId", "")
+                    title = _text(rr.get("title", {}))
+                    if lid and title:
+                        results.append({"title": html.unescape(title),
+                                        "url": f"https://www.youtube.com/watch?list={lid}",
+                                        "type_label": "radio", "source": "YouTube"})
+    except Exception:
+        pass
+    return results
+
+def _fetch_ytm(query, timeout=12):
+    url     = "https://music.youtube.com/youtubei/v1/search?prettyPrint=false"
+    payload = json.dumps({
+        "context": {"client": {
+            "clientName":    "WEB_REMIX",
+            "clientVersion": "1.20240101.01.00",
+            "hl":            "en",
+        }},
+        "query": query,
+    }).encode()
+    try:
+        req = urllib.request.Request(url, data=payload, headers={
+            "Content-Type":             "application/json",
+            "User-Agent":               "Mozilla/5.0",
+            "Origin":                   "https://music.youtube.com",
+            "X-YouTube-Client-Name":    "67",
+            "X-YouTube-Client-Version": "1.20240101.01.00",
+        })
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return json.loads(r.read())
+    except Exception:
+        return None
+
+def search_music(query, timeout=12):
+    results = []
+    seen    = set()
+    data    = _fetch_ytm(query, timeout)
+    if data:
+        for r in _parse_ytm_results(data):
+            if r["url"] not in seen:
+                seen.add(r["url"])
+                results.append(r)
+    yt_page = _fetch("https://www.youtube.com/results?search_query=" + urllib.parse.quote(query), timeout)
+    if yt_page:
+        data = _extract_initial_data(yt_page)
+        if data:
+            for r in _parse_yt_results(data):
+                if r["url"] not in seen:
+                    seen.add(r["url"])
+                    results.append(r)
+    return results
+
+# ─── PLAYBACK ─────────────────────────────────────────────────────────────────
+
+def build_radio_url(url):
+    video_id = re.search(r"(?:v=)([^&]+)", url)
+    list_id  = re.search(r"(?:list=)([^&]+)", url)
+    if not video_id:
+        return url
+    vid        = video_id.group(1)
+    lst        = list_id.group(1) if list_id else ""
+    final_list = f"RD{vid}" if (lst.startswith("RDAT") or not lst) else lst
+    return f"https://www.youtube.com/watch?v={vid}&list={final_list}"
+
+def build_mpv_cmd(url, settings, preset_overrides=None):
+    p        = preset_overrides or {}
+    no_video = p.get("no_video", settings.get("no_video", False))
+    loop     = p.get("loop",     settings.get("loop",     False))
+    radio    = p.get("radio",    False)
+    final_url = build_radio_url(url) if radio else url
+    cmd = ["mpv"]
+    if no_video:
+        cmd += ["--no-video", "--force-window=no", "--ytdl-format=bestaudio/best"]
+    if loop:
+        cmd += ["--loop-playlist"]
+    cmd.append(final_url)
+    return cmd
+
+def launch_player(cmd):
+    return subprocess.Popen(cmd, stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL, start_new_session=True)
+
+def kill_player(proc):
+    if proc is None:
+        return
+    try:
+        pgid = os.getpgid(proc.pid)
+        os.killpg(pgid, signal.SIGTERM)
+        try:
+            proc.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            os.killpg(pgid, signal.SIGKILL)
+    except (ProcessLookupError, OSError):
+        pass
+
+# ─── TERMINAL HELPERS ─────────────────────────────────────────────────────────
+
+def clear_screen():
+    sys.stdout.write("\033[2J\033[H")
+    sys.stdout.flush()
+
+def get_terminal_width():
+    try:
+        return os.get_terminal_size().columns
+    except OSError:
+        return 80
+
+def prompt_input(hint=""):
+    try:
+        return input(f"  {c(C.CYAN + C.BOLD, '❯')} {c(C.DIM, hint + ' ') if hint else ''}").strip()
+    except (EOFError, KeyboardInterrupt):
+        return "q"
+
+def open_input(hint=""):
+    try:
+        return input(f"  {c(C.CYAN + C.BOLD, '❯')} {c(C.DIM, hint + ' ') if hint else ''}").strip()
+    except (EOFError, KeyboardInterrupt):
+        return ""
+
+# ─── FZF ──────────────────────────────────────────────────────────────────────
+
+def find_fzf():
+    try:
+        subprocess.run(["which", "fzf"], capture_output=True, check=True)
+        return True
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return False
+
+def fzf_pick(items, prompt="❯ ", header=None, height="50%", capture_query=False):
+    if not items:
+        return ("", None) if capture_query else None
+    cmd = ["fzf", "--ansi", "--reverse", "--no-multi", "--no-info",
+           "--prompt", prompt, f"--height={height}", "--margin=1,2"]
+    if header:
+        cmd += ["--header", header]
+    if capture_query:
+        cmd += ["--print-query"]
+    tmp_fd, tmp_path = tempfile.mkstemp()
+    os.close(tmp_fd)
+    try:
+        with open("/dev/tty", "rb+", buffering=0) as tty:
+            p = subprocess.Popen(cmd, stdin=subprocess.PIPE,
+                                 stdout=open(tmp_path, "w"), stderr=tty, text=True)
+            p.stdin.write("\n".join(items))
+            p.stdin.close()
+            p.wait()
+        with open(tmp_path, "r") as f:
+            stdout = f.read()
+    except FileNotFoundError:
+        os.unlink(tmp_path)
+        return ("", None) if capture_query else None
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+    if capture_query:
+        lines    = stdout.splitlines()
+        query    = lines[0] if lines else ""
+        if p.returncode == 130:
+            return (query, None)
+        selected = lines[1] if len(lines) > 1 else None
+        return (query, selected)
+    else:
+        return stdout.strip() if p.returncode == 0 else None
+
+# ─── RENDERING ────────────────────────────────────────────────────────────────
+
+def render_header(subtitle="", now_playing=None):
+    width    = get_terminal_width()
+    time_str = datetime.now().strftime("%I:%M %p")
+    print()
+    print(f"  {c(C.BOLD + C.CYAN, APP_NAME)}  {c(C.DIM, subtitle)}  {c(C.DIM, time_str)}")
+    if now_playing:
+        print(f"  {C.PLAY}  {c(C.DIM, now_playing[:width - 6])}")
+    print(c(C.DIM, "─" * width))
+    print()
+
+# ─── SEARCH RESULTS PICKER ────────────────────────────────────────────────────
+
+TYPE_COLORS = {
+    "playlist/mix": C.CYAN,
+    "playlist":     C.CYAN,
+    "album":        C.MAGENTA,
+    "artist":       C.YELLOW,
+    "song":         C.GREEN,
+    "video":        C.WHITE,
+    "radio":        C.BLUE,
+    "ytmusic":      C.DIM,
+}
+
+def pick_search_result(results, query, use_fzf):
+    if not results:
+        if use_fzf:
+            chosen = fzf_pick(["retry search", "back"], prompt="action ❯ ",
+                               header=f'No results for "{query}"\n{"─" * 44}', height="25%")
+            return "retry" if chosen == "retry search" else None
+        else:
+            clear_screen()
+            render_header(f"Search: {query}")
+            print(f"  {c(C.YELLOW, '⚠')}  No results found.\n")
+            return "retry" if prompt_input("[r]etry / [b]ack").lower() == "r" else None
+
+    if use_fzf:
+        lines = []
+        for i, r in enumerate(results, 1):
+            tcolor = TYPE_COLORS.get(r["type_label"], C.DIM)
+            lines.append(f"{c(C.CYAN + C.BOLD, str(i) + '.')}  {c(tcolor, '[' + r['type_label'] + ']')}  {r['title']}  {c(C.DIM, r['source'])}")
+        chosen = fzf_pick(lines, prompt="result ❯ ",
+                           header=f"Search: {c(C.BOLD, query)}\n{'─' * 48}\nEsc → back",
+                           height="70%")
+        if chosen is None:
+            return None
+        m = re.match(r"^\x1b\[[^m]*m(\d+)\.", chosen) or re.match(r"^(\d+)\.", chosen)
+        if m:
+            idx = int(m.group(1)) - 1
+            if 0 <= idx < len(results):
+                return results[idx]
+        return None
+    else:
+        clear_screen()
+        render_header(f"Search: {query}")
+        for i, r in enumerate(results, 1):
+            tcolor = TYPE_COLORS.get(r["type_label"], C.DIM)
+            print(f"  {c(C.CYAN + C.BOLD, str(i) + '.')}  {c(tcolor, '[' + r['type_label'] + ']')}  {r['title']}")
+            print(f"       {c(C.DIM, r['source'] + '  ' + r['url'][:60])}")
+            print()
+        print(f"  {c(C.DIM, '[r] retry   [b] back')}")
+        print()
+        raw = prompt_input("number / [b]ack / [r]etry").lower()
+        if raw == "r":
+            return "retry"
+        if raw in ("b", "q", "x", ""):
+            return None
+        if raw.isdigit() and 1 <= int(raw) <= len(results):
+            return results[int(raw) - 1]
+        return None
+
+# ─── PRESET PICKER ────────────────────────────────────────────────────────────
+
+def pick_preset(presets, now_playing_name, use_fzf):
+    categories = {}
+    for slug, info in presets.items():
+        categories.setdefault(info["category"], []).append((slug, info))
+
+    if use_fzf:
+        lines     = []
+        index_map = {}
+        i = 0
+        for cat, items in categories.items():
+            for slug, info in items:
+                marker = f"  {C.PLAY}" if info["name"] == now_playing_name else "   "
+                badge  = (f"  {C.SEARCH}" if info.get("is_search_result")
+                          else f"  {c(C.DIM, '[' + info['category'] + ']')}")
+                lines.append(f"{c(C.CYAN + C.BOLD, str(i + 1) + '.')}  {marker}  {info['name']}{badge}")
+                index_map[i] = (slug, info)
+                i += 1
+        MANAGE = "manage presets"
+        lines.append(f"{c(C.CYAN + C.BOLD, '⚙')}   {MANAGE}")
+        header = (f"{APP_NAME}  —  select a preset or type to search\n"
+                  f"{'─' * 48}\n"
+                  f"Esc → quit   ·   type a query to search YouTube Music")
+        query, chosen = fzf_pick(lines, prompt="preset ❯ ", header=header,
+                                  height="70%", capture_query=True)
+        if chosen is None and not query.strip():
+            return None
+        if chosen is not None:
+            plain = re.sub(r"\x1b\[[^m]*m", "", chosen).strip()
+            if MANAGE in plain:
+                return ("manage", None)
+            m = re.match(r"^\x1b\[[^m]*m(\d+)\.", chosen) or re.match(r"^(\d+)\.", chosen)
+            if m:
+                idx = int(m.group(1)) - 1
+                if idx in index_map:
+                    return index_map[idx]
+        if query.strip().lower() in ("manage presets", "manage", "m"):
+            return ("manage", None)
+        if query.strip():
+            q = query.strip()
+            return ("url", q) if q.startswith(("http://", "https://")) else ("search", q)
+        return None
+
+    else:
+        clear_screen()
+        render_header("Select a preset", now_playing_name)
+        idx  = 1
+        rows = []
+        for cat, items in categories.items():
+            print(f"  {c(C.DIM + C.BOLD, cat)}")
+            for slug, info in items:
+                marker = f"{C.PLAY}" if info["name"] == now_playing_name else " "
+                badge  = f" {C.SEARCH}" if info.get("is_search_result") else ""
+                print(f"    {c(C.CYAN + C.BOLD, str(idx) + '.')}  {marker}  {info['name']}{badge}")
+                rows.append((slug, info))
+                idx += 1
+            print()
+        print(f"  {c(C.DIM, '[m] manage   [q] quit   or type a search query')}")
+        print()
+        raw = prompt_input("number, query, URL, [m]anage or [q]uit")
+        if raw.lower() in ("q", "x", ""):
+            return None
+        if raw.lower() == "m":
+            return ("manage", None)
+        if raw.isdigit() and 1 <= int(raw) <= len(rows):
+            return rows[int(raw) - 1]
+        if raw.strip():
+            q = raw.strip()
+            return ("url", q) if q.startswith(("http://", "https://")) else ("search", q)
+        return "invalid"
+
+# ─── PLAYING SCREEN ───────────────────────────────────────────────────────────
+
+PLAY_ACTIONS = [
+    ("switch preset",  "s"),
+    ("toggle video",   "v"),
+    ("toggle loop",    "l"),
+    ("manage presets", "m"),
+    ("quit player",    "q"),
+    ("exit tune",      "x"),
+]
+
+def pick_playing_action(preset_name, url, proc, settings, use_fzf):
+    crashed    = proc is not None and proc.poll() is not None
+    vid_state  = c(C.DIM, "suppressed") if settings["no_video"] else c(C.GREEN, "on")
+    loop_state = c(C.GREEN, "on") if settings["loop"] else c(C.DIM, "off")
+
+    if use_fzf:
+        header_lines = [
+            f"▶  {c(C.BOLD, preset_name)}",
+            f"   {c(C.DIM, 'Video')} : {vid_state}   {c(C.DIM, 'Loop')} : {loop_state}",
+        ]
+        if crashed:
+            header_lines.append(f"   {c(C.YELLOW, '⚠  Player exited.')}")
+        header_lines.append("─" * 44)
+        labels = [label for label, _ in PLAY_ACTIONS]
+        chosen = fzf_pick(labels, prompt="action ❯ ",
+                           header="\n".join(header_lines), height="55%")
+        if chosen is None:
+            return "q"
+        for label, code in PLAY_ACTIONS:
+            if chosen.strip() == label:
+                return code
+        return "q"
+    else:
+        clear_screen()
+        render_header(now_playing=preset_name)
+        width = get_terminal_width()
+        sep   = c(C.DIM, "─" * (width - 4))
+        print(f"  {c(C.GREEN + C.BOLD, '▶  NOW PLAYING')}")
+        print(f"  {sep}")
+        print(f"  {c(C.BOLD, preset_name)}")
+        print(f"  {c(C.DIM, 'URL')}   : {c(C.DIM, url[:width - 12])}")
+        print(f"  {c(C.DIM, 'Video')} : {vid_state}   {c(C.DIM, 'Loop')} : {loop_state}")
+        print(f"  {sep}")
+        if crashed:
+            print(f"\n  {c(C.YELLOW, '⚠  Player exited.')}\n")
+        print()
+        print(f"  {c(C.DIM, '[s] switch preset    [v] toggle video')}")
+        print(f"  {c(C.DIM, '[l] toggle loop      [m] manage presets')}")
+        print(f"  {c(C.DIM, '[q] quit player      [x] exit tune')}")
+        print()
+        raw = prompt_input("action").lower()
+        return raw if raw in ("s", "v", "l", "m", "q", "x") else "q"
+
+# ─── SAVE + SYMLINK FLOW ──────────────────────────────────────────────────────
+
+def _find_bin_dir():
+    d = Path.home() / ".local" / "bin" / "music"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+def prompt_save_search_result(result, use_fzf):
+    title = result["title"]
+    if use_fzf:
+        chosen = fzf_pick(["yes, save as preset", "no, discard"], prompt="save ❯ ",
+                           header=f'Save "{title}" as a preset?\n{"─" * 48}', height="25%")
+        if chosen is None or not chosen.startswith("yes"):
+            return None
+    else:
+        clear_screen()
+        render_header("Save preset?")
+        print(f'  Save "{title}" as a preset? [y/n]\n')
+        if prompt_input("[y]es / [n]o").lower() not in ("y", "yes"):
+            return None
+
+    clear_screen()
+    render_header("Save preset")
+    print(f'  {c(C.DIM, "Display name")} (Enter to use "{title}"):')
+    name = open_input() or title
+    print(f'\n  {c(C.DIM, "Category")} (Enter for "Search"):')
+    category = open_input() or "Search"
+
+    slug = config_add_preset(name, result["url"], category=category)
+    print(f"\n  {c(C.GREEN, '✓')}  Saved as {c(C.CYAN, '[preset.' + slug + ']')}")
+
+    bin_dir  = _find_bin_dir()
+    sym_path = bin_dir / slug
+
+    if use_fzf:
+        chosen = fzf_pick(
+            [f"yes — create {sym_path}", "no, skip"], prompt="symlink ❯ ",
+            header=(f'Create symlink for "{name}"?\n'
+                    f"  {sym_path}  →  tune {slug}\n"
+                    f"{'─' * 48}"),
+            height="25%",
+        )
+        do_symlink = chosen is not None and chosen.startswith("yes")
+    else:
+        print(f"\n  Create symlink {c(C.CYAN, str(sym_path))}? [y/n]")
+        do_symlink = prompt_input("[y]es / [n]o").lower() in ("y", "yes")
+
+    if do_symlink:
+        tune_path = Path(sys.argv[0]).resolve()
+        try:
+            if sym_path.exists() or sym_path.is_symlink():
+                sym_path.unlink()
+            sym_path.symlink_to(tune_path)
+            print(f"  {c(C.GREEN, '✓')}  {c(C.CYAN, str(sym_path))}")
+        except OSError as e:
+            print(f"  {c(C.YELLOW, '⚠')}  Symlink failed: {e}")
+
+    time.sleep(1.2)
+    return slug
+
+# ─── MANAGE PRESETS SCREEN ────────────────────────────────────────────────────
+
+def manage_presets_screen(presets, use_fzf):
+    while True:
+        all_presets = get_all_presets_from_config()
+        if not all_presets:
+            clear_screen()
+            render_header("Manage presets")
+            print(f"  {c(C.YELLOW, 'No presets defined.')}\n")
+            prompt_input("press enter to go back")
+            break
+
+        if use_fzf:
+            lines = []
+            for p in all_presets:
+                status = c(C.GREEN, "●") if p["enabled"] else c(C.DIM, "○")
+                lines.append(f"{status}  {p['name']}  {c(C.DIM, '[' + p['category'] + ']')}  {c(C.DIM, p['slug'])}")
+            chosen = fzf_pick(lines, prompt="preset ❯ ",
+                               header=f"Manage presets\n{'─' * 44}\nEsc → back", height="70%")
+            if chosen is None:
+                break
+            plain  = re.sub(r"\x1b\[[^m]*m", "", chosen).strip()
+            target = next((p for p in all_presets if p["slug"] in plain or p["name"] in plain), None)
+            if target is None:
+                continue
+        else:
+            clear_screen()
+            render_header("Manage presets")
+            for i, p in enumerate(all_presets, 1):
+                status = c(C.GREEN, "●") if p["enabled"] else c(C.DIM, "○")
+                print(f"  {c(C.CYAN + C.BOLD, str(i) + '.')}  {status}  "
+                      f"{p['name']}  {c(C.DIM, '[' + p['slug'] + ']')}")
+            print()
+            raw = prompt_input("number or [b]ack").lower()
+            if raw in ("b", "q", "x", ""):
+                break
+            if not raw.isdigit() or not (1 <= int(raw) <= len(all_presets)):
+                continue
+            target = all_presets[int(raw) - 1]
+
+        toggle_label = "disable" if target["enabled"] else "enable"
+
+        if use_fzf:
+            action = fzf_pick(
+                [toggle_label, "delete", "back"], prompt="action ❯ ",
+                header=(f"{'●' if target['enabled'] else '○'}  {target['name']}  "
+                        f"[{target['category']}]  [{target['slug']}]\n{'─' * 44}"),
+                height="30%",
+            )
+            if action is None or action == "back":
+                continue
+        else:
+            clear_screen()
+            render_header(f"Preset: {target['name']}")
+            status = c(C.GREEN, "● enabled") if target["enabled"] else c(C.DIM, "○ disabled")
+            print(f"  {status}  {c(C.DIM, '[' + target['slug'] + ']')}\n")
+            print(f"  1. {toggle_label}\n  2. delete\n")
+            raw = prompt_input("action or [b]ack").lower()
+            if raw in ("b", "q", "x", ""):
+                continue
+            action = toggle_label if raw == "1" else ("delete" if raw == "2" else None)
+            if not action:
+                continue
+
+        if action == "delete":
+            if use_fzf:
+                confirm = fzf_pick(["yes, delete", "no, keep"], prompt="confirm ❯ ",
+                                    header=f'Delete "{target["name"]}"?\n{"─" * 44}', height="25%")
+                confirmed = confirm is not None and confirm.startswith("yes")
+            else:
+                clear_screen()
+                render_header("Confirm delete")
+                print(f'  Delete "{target["name"]}"? [y/n]\n')
+                confirmed = prompt_input("[y]es / [n]o").lower() in ("y", "yes")
+            if confirmed:
+                config_delete_preset(target["slug"])
+                print(f"\n  {c(C.GREEN, '✓')}  Deleted {c(C.CYAN, target['name'])}")
+                time.sleep(0.8)
+
+        elif action in ("enable", "disable"):
+            config_toggle_preset(target["slug"], enable=(action == "enable"))
+            state = c(C.GREEN, "enabled") if action == "enable" else c(C.DIM, "disabled")
+            print(f"\n  {c(C.GREEN, '✓')}  {target['name']} is now {state}")
+            time.sleep(0.8)
+
+    try:
+        return get_presets(load_config())
+    except Exception:
+        return presets
+
+# ─── INTERACTIVE MODE ─────────────────────────────────────────────────────────
+
+def run_interactive(settings, presets):
+    use_fzf      = find_fzf()
+    player_proc  = [None]
+    now_playing  = [None]
+    search_cache = {}
+    _ipc_done    = [None]
+
+    def stop():
+        if _ipc_done[0] is not None:
+            _ipc_done[0].set()
+            _ipc_done[0] = None
+        kill_player(player_proc[0])
+        player_proc[0] = None
+
+    def play(info):
+        stop()
+        cmd = build_mpv_cmd(info["url"], settings, preset_overrides=info)
+        player_proc[0] = launch_player(cmd)
+        now_playing[0] = info
+        done = threading.Event()
+        _ipc_done[0] = done
+        threading.Thread(target=_ipc_watch, args=(info["name"], None, done),
+                         daemon=True).start()
+
+    def goodbye():
+        stop()
+        print(f"\n  {c(C.DIM, 'Goodbye! 👋')}\n")
+
+    def merged():
+        m = dict(presets)
+        m.update(search_cache)
+        return m
+
+    if use_fzf:
+        print(f"  {c(C.DIM, 'fzf detected — using fzf interface')}")
+    else:
+        print(f"  {c(C.DIM, 'fzf not found — using plain menu')}")
+
+    while True:
+        np_name = now_playing[0]["name"] if now_playing[0] else None
+        result  = pick_preset(merged(), np_name, use_fzf)
+
+        if result is None:
+            goodbye(); return
+        if result == "invalid":
+            continue
+
+        if isinstance(result, tuple) and result[0] == "manage":
+            presets = manage_presets_screen(presets, use_fzf)
+            continue
+
+        if isinstance(result, tuple) and result[0] == "url":
+            info = {"name": result[1][:60], "url": result[1], "loop": settings["loop"],
+                    "no_video": settings["no_video"], "radio": False, "is_search_result": False}
+            play(info)
+            _playing_loop(info, player_proc, settings, use_fzf, stop, play, goodbye,
+                          lambda: manage_presets_screen(presets, use_fzf), offer_save=False)
+            continue
+
+        if isinstance(result, tuple) and result[0] == "search":
+            query = result[1]
+            while True:
+                clear_screen()
+                render_header(f"Searching: {query}")
+                print(f"  {c(C.DIM, '🔍 Searching YouTube Music + YouTube...')}\n")
+                search_results = search_music(query)
+                picked = pick_search_result(search_results, query, use_fzf)
+                if picked is None:
+                    break
+                if picked == "retry":
+                    continue
+                slug = _slugify(picked["title"])
+                info = {"name": picked["title"], "url": picked["url"], "category": "Search",
+                        "loop": settings["loop"], "no_video": settings["no_video"],
+                        "radio": False, "is_search_result": True, "_search_raw": picked}
+                search_cache[slug] = info
+                play(info)
+                stopped = _playing_loop(info, player_proc, settings, use_fzf, stop, play, goodbye,
+                                        lambda: manage_presets_screen(presets, use_fzf), offer_save=True)
+                if stopped:
+                    new_slug = prompt_save_search_result(picked, use_fzf)
+                    if new_slug:
+                        try:
+                            presets = get_presets(load_config())
+                        except Exception:
+                            pass
+                        search_cache.pop(slug, None)
+                break
+            continue
+
+        slug, info = result
+        play(info)
+        _playing_loop(info, player_proc, settings, use_fzf, stop, play, goodbye,
+                      lambda: manage_presets_screen(presets, use_fzf), offer_save=False)
+
+
+def _playing_loop(info, player_proc, settings, use_fzf,
+                  stop_fn, play_fn, goodbye_fn, manage_fn, offer_save=False):
+    while True:
+        action = pick_playing_action(info["name"], info["url"],
+                                     player_proc[0], settings, use_fzf)
+        if action == "s":
+            stop_fn(); return True
+        elif action == "v":
+            settings["no_video"] = not settings["no_video"]
+            info["no_video"]     = settings["no_video"]
+            play_fn(info)
+        elif action == "l":
+            settings["loop"] = not settings["loop"]
+            info["loop"]     = settings["loop"]
+            play_fn(info)
+        elif action == "m":
+            manage_fn()
+        elif action == "q":
+            stop_fn(); return True
+        elif action == "x":
+            goodbye_fn(); sys.exit(0)
+
+# ─── CLI MODE ─────────────────────────────────────────────────────────────────
+
+def resolve_preset(query, presets):
+    q = query.lower().strip()
+    aliases = {"lp": "linkin-park", "bb": "breaking-benjamin", "mcr": "mcr",
+               "eheads": "eraserheads", "bfmv": "bfmv", "a7x": "a7x"}
+    if q in aliases and aliases[q] in presets:
+        return presets[aliases[q]]
+    if q in presets:
+        return presets[q]
+    for slug, info in presets.items():
+        if q in slug or q in info["name"].lower():
+            return info
+    return None
+
+def print_help(presets):
+    categories = {}
+    for slug, info in presets.items():
+        categories.setdefault(info["category"], []).append((slug, info["name"]))
+    print(f"""
+🎵 TUNE — Music preset player
+
+CONFIG: {CONFIG_FILE}
+
+USAGE:
+    tune                        Interactive TUI
+    tune <preset> [options]     Direct play
+    tune <url>   [options]      Play a URL directly
+    tune --list                 List all presets
+    tune --config               Edit config file
+    tune --help
+
+OPTIONS:
+    --no-video, --no-window     Force audio-only (suppress window)
+    --loop, -l                  Loop playlist
+    --no-loop                   Don't loop
+    --bg, --background          Run in background
+    --fg, --foreground          Run in foreground
+    --radio                     Seed YouTube radio mix
+    --shuffle                   Shuffle playlist
+
+PRESETS:""")
+    for cat, items in categories.items():
+        print(f"\n  {cat}:")
+        for slug, name in items:
+            print(f"    {slug:<28}  {name}")
+    print(f"""
+SYMLINKS:
+    ln -s $(which tune) ~/.local/bin/music/linkin-park
+    ln -s $(which tune) ~/.local/bin/music/lofi
+""")
+
+def cli_play(info, settings, extra_flags):
+    s = dict(settings)
+    s.update(extra_flags)
+    info = dict(info)
+    for key in ("no_video", "loop", "radio"):
+        if key in extra_flags:
+            info[key] = extra_flags[key]
+    cmd = build_mpv_cmd(info["url"], s, preset_overrides=info)
+    if extra_flags.get("background"):
+        subprocess.Popen(cmd, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL, start_new_session=True)
+        print(f"  {C.PLAY}  Started in background: {info['name']}")
+    else:
+        subprocess.run(cmd)
+
+def parse_cli_flags(args):
+    flags, remaining = {}, []
+    for a in args:
+        if   a in ("--no-video", "--no-window"): flags["no_video"]   = True
+        elif a == "--video":                      flags["no_video"]   = False
+        elif a in ("--loop", "-l"):               flags["loop"]       = True
+        elif a == "--no-loop":                    flags["loop"]       = False
+        elif a in ("--bg", "--background"):       flags["background"] = True
+        elif a in ("--fg", "--foreground"):       flags["background"] = False
+        elif a == "--radio":                      flags["radio"]      = True
+        elif a == "--shuffle":                    flags["shuffle"]    = True
+        elif a == "--no-resume":                  flags["no_resume"]  = True
+        else:                                     remaining.append(a)
+    return flags, remaining
+
+# ─── ENTRY POINT ──────────────────────────────────────────────────────────────
+
+def main():
+    is_new = init_config()
+    if is_new:
+        print(f"  {c(C.GREEN, '✓')}  Config created: {CONFIG_FILE}")
+
+    try:
+        config   = load_config()
+        presets  = get_presets(config)
+        settings = get_settings(config)
+    except Exception as e:
+        print(f"❌ Error loading config: {e}")
+        sys.exit(1)
+
+    script_name = Path(sys.argv[0]).name
+    if script_name != "tune":
+        flags, _ = parse_cli_flags(sys.argv[1:])
+        info = resolve_preset(script_name, presets)
+        if not info:
+            print(f"❌ No preset found for '{script_name}'")
+            sys.exit(1)
+        cli_play(info, settings, flags)
+        return
+
+    args = sys.argv[1:]
+
+    if not args:
+        run_interactive(settings, presets)
+        return
+
+    if args[0] in ("--help", "-h", "help"):
+        print_help(presets); sys.exit(0)
+
+    if args[0] in ("--list", "-l", "list"):
+        categories = {}
+        for slug, info in presets.items():
+            categories.setdefault(info["category"], []).append((slug, info))
+        print(f"\n{c(C.BOLD + C.CYAN, APP_NAME)}  —  presets\n")
+        for cat, items in categories.items():
+            print(f"  {c(C.DIM + C.BOLD, cat)}")
+            for slug, info in items:
+                print(f"    {c(C.CYAN, slug):<30}  {info['name']}")
+            print()
+        sys.exit(0)
+
+    if args[0] in ("--config", "-c", "config", "--edit"):
+        subprocess.run([os.environ.get("EDITOR", "nano"), str(CONFIG_FILE)])
+        sys.exit(0)
+
+    query        = args[0]
+    flags, _rest = parse_cli_flags(args[1:])
+
+    if query.startswith(("http://", "https://")):
+        info = {"name": query[:60], "url": query, "loop": settings["loop"],
+                "no_video": settings["no_video"], "radio": flags.get("radio", False)}
+    else:
+        info = resolve_preset(query, presets)
+        if not info:
+            print(f"❌ Unknown preset: '{query}'")
+            suggestions = [s for s in presets if query.replace("-", "") in s.replace("-", "")]
+            if suggestions:
+                print(f"   Did you mean: {', '.join(suggestions[:4])}")
+            sys.exit(1)
+
+    cli_play(info, settings, flags)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\n\n👋 Goodbye!")
+        sys.exit(0)
+    except Exception as e:
+        print(f"\n❌ Error: {e}")
+        import traceback; traceback.print_exc()
+        sys.exit(1)
