@@ -2,10 +2,16 @@
 
 ## Project
 
-Merged the three scripts `yt-cli`, `tune`, `news-stream` into ONE script
-`yt-cli` (repo root; symlinked at `~/.local/bin/yt-cli`). The `tune` and `news-stream`
+Merged the three scripts `yt-cli`, `tune`, `news-stream` into ONE module
+`yt_cli.py` behind a thin executable wrapper `yt-cli` (2026-09-22 wrapper split,
+ani-py style; same content as the former monolith). The wrapper does
+`from yt_cli import main` and carries the KeyboardInterrupt/error handlers that
+used to live only in the monolith's `__main__` guard. Symlinked at
+`~/.local/bin/yt-cli`. The `tune` and `news-stream`
 symlinks were REMOVED; radio/news are invoked via `yt-cli --radio` / `yt-cli --news`.
-Dispatch is by `Path(sys.argv[0]).name`: `yt-cli` → main menu, a music/<preset>
+Dispatch is by `Path(sys.argv[0]).name` (argv[0] is preserved by Python when
+running through the wrapper, and `sys.path[0]` resolves the music/* → ../yt-cli
+→ repo symlink chain, so `import yt_cli` works): `yt-cli` → main menu, a music/<preset>
 symlink → radio preset lookup + direct play, `tune`/`news-stream` names → radio/news
 (kept for backward compat if re-symlinked). A unified main menu
 (Search / Radio / News / History / Exit), harmonized action menu, universal
@@ -16,7 +22,11 @@ Music symlinks in `~/.local/bin/music/` point to `../yt-cli` — running
 
 ## Location
 
-Lives in the dedicated repo `~/Coding/projects/yt-cli/` (monolithic `yt-cli` script at repo root). Symlinked from `~/.local/bin/yt-cli` for PATH dispatch. E2E harness: `tests/e2e/`. Project docs: `docs/`.
+Lives in the dedicated repo `~/Coding/projects/yt-cli/` — logic in `yt_cli.py`,
+launcher wrapper `yt-cli` at repo root (symlink target `~/.local/bin/yt-cli` for
+PATH dispatch; `music/<preset>` symlinks chain through it and keep working).
+"Save preset → create symlink" resolves `argv[0]` fully, so new music links point
+directly at the wrapper file — still correct. E2E harness: `tests/e2e/`. Project docs: `docs/`.
 
 ## Architecture
 

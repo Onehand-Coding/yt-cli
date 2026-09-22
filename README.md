@@ -14,7 +14,8 @@ Formerly three scripts (`yt-cli`, `tune`, `news-stream`), merged into one. Dispa
 ## Layout
 
 ```
-yt-cli              # monolithic executable script (repo root)
+yt-cli              # executable wrapper (imports yt_cli; PATH symlink target)
+yt_cli.py           # the monolith — all app logic
 CONTEXT.md          # architecture, decisions, E2E gotchas
 docs/
   plans/            # implementation plans
@@ -38,6 +39,8 @@ yt-cli --news
 
 # Direct
 ./yt-cli --radio lofi --no-video --loop
+python3 yt_cli.py --radio lofi   # note: top-level dispatch uses argv[0] name;
+                                 # a non-"yt-cli" name takes the preset branch
 ```
 
 Requires: `mpv`, `yt-dlp`, `fzf` (curses fallback if fzf missing).
