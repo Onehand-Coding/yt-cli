@@ -8,11 +8,12 @@ news-stream → news mode, anything else → radio preset lookup.
 
 import asyncio
 import configparser
+import copy
 import curses
 import html
-import itertools
 import json
 import os
+import random
 import re
 import shutil
 import signal
@@ -55,7 +56,7 @@ class C:
     MAGENTA = "\033[35m"
     CYAN    = "\033[36m"
     WHITE   = "\033[37m"
-    PLAY    = f"\033[32m▶\033[0m"
+    PLAY    = "\033[32m▶\033[0m"
     LIVE    = f"\033[31m{BOLD}● LIVE{RESET}"
     RECENT  = f"\033[33m⏱{RESET}"
 
@@ -109,6 +110,7 @@ DEFAULT_CONFIG = {
         "recent_hours": 24,
         "sources": [],
     },
+    "stations": [],
 }
 
 # Volatile toggles live in state.json (gitignored) so casual keypresses
@@ -146,11 +148,14 @@ def save_state(state):
 def load_config():
     cfg = load_json(CONFIG_PATH, None)
     if cfg is None:
-        return dict(DEFAULT_CONFIG)
+        return copy.deepcopy(DEFAULT_CONFIG)
     merged = dict(DEFAULT_CONFIG)
+    merged["stations"] = list(DEFAULT_CONFIG["stations"])
     for k, v in cfg.items():
         if k in ("radio", "news"):
             merged[k] = {**DEFAULT_CONFIG[k], **v}
+        elif k == "stations":
+            merged[k] = list(v) if isinstance(v, list) else []
         else:
             merged[k] = v
     return merged
@@ -344,6 +349,7 @@ def fzf_pick(items, prompt="❯ ", header=None, height="50%", capture_query=Fals
         with open("/dev/tty", "rb+", buffering=0) as tty:
             p = subprocess.Popen(cmd, stdin=subprocess.PIPE,
                                  stdout=open(tmp_path, "w"), stderr=tty, text=True)
+            assert p.stdin is not None
             p.stdin.write("\n".join(items))
             p.stdin.close()
             p.wait()
@@ -368,7 +374,8 @@ def fzf_pick(items, prompt="❯ ", header=None, height="50%", capture_query=Fals
 
 
 def _num_line(i, text):
-    return f"{c(C.BOLD + C.CYAN, str(i) + '.')}  {text}"
+    # Numbers stay because they are quick-select shortcuts; dim keeps rows calm.
+    return f"{c(C.DIM, str(i) + '.')}  {text}"
 
 
 def _parse_index(chosen):
@@ -386,7 +393,7 @@ class FzfUI:
     def pick_query(self, items, prompt, header, height):
         lines = [_num_line(i + 1, it) for i, it in enumerate(items)]
         query, chosen, _ = fzf_pick(lines, prompt=prompt, header=header,
-                                    height=height, capture_query=True)
+                                    height=height, capture_query=True)  # type: ignore[misc]
         return query, _parse_index(chosen)
 
     def action(self, header_lines, actions):
@@ -403,7 +410,7 @@ class FzfUI:
     def query(self, header_lines):
         q, _, escaped = fzf_pick([], prompt="search ❯ ",
                                  header="\n".join(header_lines), height="25%",
-                                 capture_query=True)
+                                 capture_query=True)  # type: ignore[misc]
         if escaped:
             return None
         return q or ""
@@ -595,7 +602,7 @@ class CursesUI:
                 top = sel - visible + 1
 
     def action(self, header_lines, actions):
-        items = [f"{c(C.CYAN + C.BOLD, str(i + 1) + '.')}  {label}  {c(C.DIM, '[' + code + ']')}"
+        items = [_num_line(i + 1, f"{label}  {c(C.DIM, '[' + code + ']')}")
                  for i, (label, code) in enumerate(actions)]
         idx = self.pick(items, "action ❯ ", "\n".join(header_lines) + "\n" + "─" * 44, "55%")
         if idx is None:
@@ -805,6 +812,7 @@ async def _search_ytdlp(query, count):
     proc = await asyncio.create_subprocess_exec(
         *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
     )
+    assert proc.stdout is not None and proc.stderr is not None
     stdout_data = await proc.stdout.read()
     await proc.wait()
     if proc.returncode != 0:
@@ -841,13 +849,13 @@ def run_search_mode(cfg, ui, stop, play, return_home=False,
                     initial_items=None, initial_header=None):
     """Full search mode. return_home=True: after 'q' return to caller instead of the list."""
     items = initial_items or []
-    header = initial_header or "yt-cli — history"
+    header = initial_header or "yt-cli · history"
 
     item = None
     # If called from main menu with no initial list, start with the query stage.
     if initial_items is None:
         while True:
-            query = ui.query(["yt-cli — search YouTube",
+            query = ui.query(["yt-cli · search YouTube",
                               "Esc → quit   ·   empty Enter → history"])
             if query is None:
                 return
@@ -873,10 +881,10 @@ def run_search_mode(cfg, ui, stop, play, return_home=False,
                                  [("retry search", "r"), ("back", "b")]) != "r":
                         return
                     continue
-                header = f"yt-cli — results: {query} ({len(items)})"
+                header = f"yt-cli · results: {query} ({len(items)})"
             else:
                 items = load_json(HISTORY_PATH, [])
-                header = "yt-cli — history"
+                header = "yt-cli · history"
                 if not items:
                     ui.info(["No history yet"])
                     return
@@ -899,7 +907,7 @@ def run_search_mode(cfg, ui, stop, play, return_home=False,
                 continue       # back to results picker, player keeps playing
             elif action == "h":
                 items = load_json(HISTORY_PATH, [])
-                header = "yt-cli — history"
+                header = "yt-cli · history"
                 if not items:
                     ui.info(["No history yet"])
                 continue
@@ -920,7 +928,7 @@ def run_search_mode(cfg, ui, stop, play, return_home=False,
                 if dest:
                     raise GoTo(dest)
             elif action == "d":
-                print(f"\n  {c(C.GREEN, '▶')}  {c(C.DIM, 'detached — playing in background')}\n")
+                print(f"\n  {c(C.GREEN, '▶')}  {c(C.DIM, 'detached · playing in background')}\n")
                 sys.exit(0)
             elif action == "q":
                 stop()
@@ -945,13 +953,13 @@ def run_search_mode(cfg, ui, stop, play, return_home=False,
         play(item)
 
 
-PLAYER_PROC = [None]
-IPC_DONE = [None]
+PLAYER_PROC: list = [None]
+IPC_DONE: list = [None]
 # Global now-playing registry: every launcher records a reopen closure so
 # the main menu can offer "▶ Now Playing" controls from anywhere.
-NOW_PLAYING = [None]
+NOW_PLAYING: list = [None]
 # True when we reattached to a detached player via IPC (no Popen handle).
-ATTACHED = [False]
+ATTACHED: list = [False]
 
 
 def ipc_rpc(cmd, timeout=2):
@@ -1025,7 +1033,7 @@ def run_history_screen(cfg, ui, stop, play):
         ui.info(["No history yet"])
         return
     run_search_mode(cfg, ui, stop, play, return_home=True,
-                    initial_items=items, initial_header="yt-cli — history")
+                    initial_items=items, initial_header="yt-cli · history")
 
 # ---------- orchestration ----------
 
@@ -1046,6 +1054,13 @@ def stop_shared():
 def _search_play_default(cfg):
     """mpv launcher for search-mode play (used by search-from-anywhere)."""
     def play_mpv(item):
+        if item.get("kind") == "station":
+            _station_play(cfg, {
+                "name": item.get("title") or item.get("url", ""),
+                "url": item.get("url", ""),
+                "stationuuid": item.get("stationuuid", ""),
+            }, stop_fn=stop_shared)
+            return
         stop_shared()
         add_to_history(item, cfg["history_size"])
         NOW_PLAYING[0] = {"title": item.get("title") or item.get("url", ""),
@@ -1097,6 +1112,8 @@ def now_playing_screen(cfg, ui):
         ]
         entries = ["replay", "toggle video", "go to…", "stop player",
                    "detach & exit", "main menu"]
+        if np.get("kind") == "station":
+            entries.remove("toggle video")
         idx = ui.pick(entries, "now playing ❯ ",
                       "\n".join(header) + "\nEsc → main menu", "50%")
         if idx is None:
@@ -1117,7 +1134,7 @@ def now_playing_screen(cfg, ui):
             stop_shared()
             return
         elif choice == "detach & exit":
-            print(f"\n  {c(C.GREEN, '▶')}  {c(C.DIM, 'detached — playing in background')}\n")
+            print(f"\n  {c(C.GREEN, '▶')}  {c(C.DIM, 'detached · playing in background')}\n")
             sys.exit(0)
         elif choice == "main menu":
             return
@@ -1128,6 +1145,8 @@ def _run_mode(cfg, ui, choice, stop, play_mpv, goodbye, on_esc="quit"):
         run_search_mode(cfg, ui, stop, play_mpv, return_home=True)
     elif choice == "Radio":
         run_radio_mode(cfg, ui, stop, play_mpv, goodbye, on_esc=on_esc)
+    elif choice == "Stations":
+        run_stations_mode(cfg, ui, stop, goodbye, on_esc=on_esc)
     elif choice == "News":
         run_news_mode(cfg, ui, stop, goodbye, on_esc=on_esc)
     elif choice == "History":
@@ -1159,18 +1178,19 @@ def run_fzf(cfg, mode=None):
     signal.signal(signal.SIGHUP, _clean_exit)
     signal.signal(signal.SIGTERM, _clean_exit)
 
-    if mode in ("radio", "news"):
-        _run_mode_loop(cfg, ui, "Radio" if mode == "radio" else "News",
-                       stop_shared, play_mpv, goodbye)
+    if mode in ("radio", "stations", "news"):
+        dest = {"radio": "Radio", "stations": "Stations", "news": "News"}[mode]
+        _run_mode_loop(cfg, ui, dest, stop_shared, play_mpv, goodbye)
         return
 
     while True:
         clear_screen()
-        entries = ["Search", "Radio", "News", "History"]
+        entries = ["Search", "Radio", "Stations", "News", "History"]
         if player_active():
             entries.insert(0, "▶ Now Playing")
         entries.append("Exit")
-        idx = ui.pick(entries, "main ❯ ", "yt-cli  —  unified search / radio / news", "50%")
+        idx = ui.pick(entries, "main ❯ ",
+                      "yt-cli · search / radio / stations / news", "50%")
         if idx is None:
             goodbye()
             return
@@ -1181,7 +1201,7 @@ def run_fzf(cfg, mode=None):
                                 [("leave playing in background", "d"),
                                  ("stop player and exit", "s")])
                 if act == "d":
-                    print(f"\n  {c(C.GREEN, '▶')}  {c(C.DIM, 'detached — playing in background')}\n")
+                    print(f"\n  {c(C.GREEN, '▶')}  {c(C.DIM, 'detached · playing in background')}\n")
                     return
                 if act != "s":
                     continue          # Esc → cancel
@@ -1422,7 +1442,7 @@ def attach_detached():
     try:
         path = ipc_rpc(["get_property", "path"])
         title = ipc_rpc(["get_property", "media-title"])
-    except (OSError, ValueError, RuntimeError) as e:
+    except (OSError, ValueError, RuntimeError):
         try:
             os.unlink(IPC_SOCKET)     # stale socket file from a dead player
         except OSError:
@@ -1430,16 +1450,29 @@ def attach_detached():
         return False
     if not path:
         return False
-    NOW_PLAYING[0] = {
-        "title": title or path,
-        "replay": lambda: relaunch_detached(path),
-    }
+    station = station_for_url(path)
+    if station:
+        NOW_PLAYING[0] = {
+            "title": title or station.get("name") or path,
+            "kind": "station",
+            "replay": lambda: relaunch_detached(path),
+        }
+    else:
+        NOW_PLAYING[0] = {
+            "title": title or path,
+            "replay": lambda: relaunch_detached(path),
+        }
     ATTACHED[0] = True
     return True
 
 
 def relaunch_detached(url):
     stop_shared()
+    station = station_for_url(url)
+    if station:
+        PLAYER_PROC[0] = launch_player(build_station_cmd(station))
+        ATTACHED[0] = False
+        return
     cmd = ["mpv", "--force-window=no", f"--ytdl-format={ytdl_quality_format(load_config().get('quality', '720'))}"]
     st = load_state().get("radio", {})
     if st.get("no_video"):
@@ -1651,27 +1684,14 @@ def search_music(query, timeout=12):
     return results
 
 
-TYPE_COLORS = {
-    "playlist/mix": C.CYAN,
-    "playlist":     C.CYAN,
-    "album":        C.MAGENTA,
-    "artist":       C.YELLOW,
-    "song":         C.GREEN,
-    "video":        C.WHITE,
-    "radio":        C.BLUE,
-    "ytmusic":      C.DIM,
-}
-
-
 def pick_search_result(results, query, ui):
     if not results:
         action = ui.action([f'No results for "{query}"', "─" * 44],
                            [("retry search", "r"), ("back", "b")])
         return "retry" if action == "r" else None
     lines = []
-    for i, r in enumerate(results, 1):
-        tcolor = TYPE_COLORS.get(r["type_label"], C.DIM)
-        lines.append(f"{c(tcolor, '[' + r['type_label'] + ']')}  {r['title']}  {c(C.DIM, r['source'])}")
+    for r in results:
+        lines.append(f"{c(C.DIM, '[' + r['type_label'] + ']')}  {r['title']}  {c(C.DIM, r['source'])}")
     idx = ui.pick(lines, "result ❯ ",
                   f"Search: {c(C.BOLD, query)}\n{'─' * 48}\nEsc → back", "70%")
     if idx is None:
@@ -1689,13 +1709,13 @@ def pick_preset(presets, now_playing_name, ui):
     for cat, items in categories.items():
         for slug, info in items:
             marker = f"{C.PLAY}" if info["name"] == now_playing_name else "  "
-            badge  = (f"  🔍" if info.get("is_search_result")
+            badge  = ("  🔍" if info.get("is_search_result")
                       else f"  {c(C.DIM, '[' + info['category'] + ']')}")
             lines.append(f"  {marker}  {info['name']}{badge}")
             index_map.append((slug, info))
     MANAGE = "manage presets"
     lines.append(f"  ⚙   {MANAGE}")
-    header = ("yt-cli  —  radio: select a preset or type to search\n" +
+    header = ("yt-cli · radio: select a preset or type to search\n" +
               "─" * 48 + "\n" +
               "Esc → quit   ·   type a query to search YouTube Music")
     query, idx = ui.pick_query(lines, "preset ❯ ", header, "70%")
@@ -1791,16 +1811,17 @@ class GoTo(Exception):
         self.dest = dest
 
 
-GO_TO_LABELS = {"radio": "Radio", "news": "News", "search": "Search"}
+GO_TO_LABELS = {"radio": "Radio", "stations": "Stations",
+                "news": "News", "search": "Search"}
 
 
 def go_to_picker(ui):
-    entries = ["Radio", "News", "Search", "Home"]
+    entries = ["Radio", "Stations", "News", "Search", "Home"]
     idx = ui.pick(entries, "go to ❯ ",
                   "Go to\n" + "─" * 44 + "\nEsc → stay here", "35%")
     if idx is None:
         return None
-    return {"Radio": "radio", "News": "news",
+    return {"Radio": "radio", "Stations": "stations", "News": "news",
             "Search": "search", "Home": "home"}[entries[idx]]
 
 
@@ -1874,7 +1895,7 @@ def url_entry_flow(cfg, ui, url):
     if meta:
         sp.done(f"Found: {meta['title'][:60]}")
     else:
-        sp.fail("Could not resolve — using URL as-is")
+        sp.fail("Could not resolve: using URL as-is")
     title = (meta or {}).get("title") or url[:60]
     action = ui.action([f"URL:  {c(C.BOLD, title)}",
                         f"   {c(C.DIM, url[:70])}", "─" * 48],
@@ -1934,7 +1955,8 @@ def run_radio_mode(cfg, ui, stop, play_mpv, goodbye, on_esc="quit"):
             continue
 
         if isinstance(result, tuple) and result[0] == "url":
-            info = {"name": result[1][:60], "url": result[1], "loop": settings["loop"],
+            url = result[1] or ""
+            info = {"name": url[:60], "url": url, "loop": settings["loop"],
                     "no_video": settings["no_video"], "radio": False,
                     "is_search_result": True}
             radio_playing_loop(cfg, ui, info, settings, stop, play_radio, goodbye)
@@ -2024,7 +2046,7 @@ def radio_playing_loop(cfg, ui, info, settings, stop_fn, play_fn, goodbye_fn):
         elif action == "h":
             run_history_screen(cfg, ui, stop_fn, play_search)
         elif action == "d":
-            print(f"\n  {c(C.GREEN, '▶')}  {c(C.DIM, 'detached — playing in background')}\n")
+            print(f"\n  {c(C.GREEN, '▶')}  {c(C.DIM, 'detached · playing in background')}\n")
             sys.exit(0)
         elif action == "q":
             stop_fn()
@@ -2032,6 +2054,580 @@ def radio_playing_loop(cfg, ui, info, settings, stop_fn, play_fn, goodbye_fn):
         elif action == "x":
             goodbye_fn()
             sys.exit(0)
+
+
+# ---------- MODE: STATIONS (real internet radio) ----------
+
+RB_USER_AGENT = "yt-cli/1.1"
+RB_FALLBACK_HOSTS = (
+    "de1.api.radio-browser.info",
+    "de2.api.radio-browser.info",
+    "nl1.api.radio-browser.info",
+)
+RB_SEARCH_LIMIT = 30
+RB_TIMEOUT = 8
+
+STATION_FIELDS = (
+    "slug", "name", "url", "stationuuid", "countrycode", "tags",
+    "codec", "bitrate", "homepage", "favicon", "enabled",
+)
+
+_rb_host_cache: list = [None]
+_rb_host_discovery: list = [None]
+_STATION_SEARCH_CACHE = {}
+
+
+def _rb_hosts():
+    """radio-browser mirrors: discovered names first, hardcoded fallbacks last."""
+    if _rb_host_discovery[0] is None:
+        hosts = []
+        try:
+            _name, _aliases, ips = socket.gethostbyname_ex(
+                "all.api.radio-browser.info")
+        except OSError:
+            ips = []
+        for ip in ips:
+            try:
+                name = socket.gethostbyaddr(ip)[0]
+            except OSError:
+                continue
+            if name and name not in hosts:
+                hosts.append(name)
+        random.shuffle(hosts)
+        for host in RB_FALLBACK_HOSTS:
+            if host not in hosts:
+                hosts.append(host)
+        _rb_host_discovery[0] = hosts
+    hosts = list(_rb_host_discovery[0])
+    cached = _rb_host_cache[0]
+    if cached in hosts:
+        hosts.remove(cached)
+        hosts.insert(0, cached)
+    return hosts
+
+
+def _rb_get(path, params=None, timeout=RB_TIMEOUT):
+    qs = ("?" + urllib.parse.urlencode(params)) if params else ""
+    last_err = None
+    for host in _rb_hosts()[:3]:
+        try:
+            req = urllib.request.Request(
+                f"https://{host}{path}{qs}",
+                headers={"User-Agent": RB_USER_AGENT,
+                         "Accept": "application/json"})
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                data = json.loads(resp.read().decode("utf-8", errors="replace"))
+            _rb_host_cache[0] = host
+            return data
+        except (OSError, ValueError) as e:
+            last_err = e
+    raise SearchError(f"radio-browser unavailable: {last_err}")
+
+
+def _normalize_station(raw):
+    """Map one radio-browser record to a station dict; None when unusable."""
+    if not isinstance(raw, dict):
+        return None
+    url = (raw.get("url_resolved") or raw.get("url") or "").strip()
+    if not url.lower().startswith(("http://", "https://")):
+        return None
+    name = html.unescape((raw.get("name") or "").strip())
+    if not name:
+        return None
+    tags = []
+    for tag in (raw.get("tags") or "").split(","):
+        tag = tag.strip().lower()
+        if tag and tag not in tags:
+            tags.append(tag)
+
+    def _int(key):
+        try:
+            return int(raw.get(key) or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    return {
+        "name": name,
+        "url": url,
+        "stationuuid": (raw.get("stationuuid") or "").strip(),
+        "countrycode": (raw.get("countrycode") or "").strip().upper()[:2],
+        "tags": tags,
+        "codec": (raw.get("codec") or "").strip(),
+        "bitrate": _int("bitrate"),
+        "homepage": (raw.get("homepage") or "").strip(),
+        "favicon": (raw.get("favicon") or "").strip(),
+        "clickcount": _int("clickcount"),
+        "votes": _int("votes"),
+        "enabled": True,
+    }
+
+
+def _merge_station_results(*groups):
+    """Merge normalized station lists, dedupe, rank by clicks then votes."""
+    merged = {}
+    for group in groups:
+        for station in group or []:
+            if not station:
+                continue
+            key = station.get("stationuuid") or (
+                station["name"].lower(), station["url"])
+            if key not in merged:
+                merged[key] = station
+    out = list(merged.values())
+    out.sort(key=lambda s: (-s.get("clickcount", 0),
+                            -s.get("votes", 0), s["name"].lower()))
+    return out
+
+
+def _normalize_station_list(raw):
+    """Normalize a radio-browser response, tolerating non-list payloads."""
+    if not isinstance(raw, list):
+        return []
+    return [s for s in (_normalize_station(r) for r in raw) if s]
+
+
+def search_stations(query):
+    """Search radio-browser by name, falling back to tags when sparse."""
+    q = (query or "").strip()
+    if not q:
+        return []
+    cache_key = q.lower()
+    if cache_key in _STATION_SEARCH_CACHE:
+        return list(_STATION_SEARCH_CACHE[cache_key])
+
+    params = {"name": q, "limit": RB_SEARCH_LIMIT, "hidebroken": "true",
+              "order": "clickcount", "reverse": "true"}
+    results = _normalize_station_list(
+        _rb_get("/json/stations/search", params))
+    if len(results) < 8:
+        tag_params = {"tag": q, "limit": RB_SEARCH_LIMIT,
+                      "hidebroken": "true", "order": "clickcount",
+                      "reverse": "true"}
+        tag_results = _normalize_station_list(
+            _rb_get("/json/stations/search", tag_params))
+        results = _merge_station_results(results, tag_results)
+    else:
+        results = _merge_station_results(results)
+    results = results[:RB_SEARCH_LIMIT]
+    _STATION_SEARCH_CACHE[cache_key] = results
+    return list(results)
+
+
+def report_station_click(uuid):
+    """Tell radio-browser a station was played; never block the UI."""
+    if not uuid:
+        return
+
+    def work():
+        try:
+            host = _rb_host_cache[0] or _rb_hosts()[0]
+            req = urllib.request.Request(
+                f"https://{host}/json/url/{urllib.parse.quote(uuid)}",
+                headers={"User-Agent": RB_USER_AGENT})
+            with urllib.request.urlopen(req, timeout=4):
+                pass
+        except (OSError, ValueError, IndexError):
+            pass
+
+    threading.Thread(target=work, daemon=True).start()
+
+
+# --- saved stations ---
+
+def get_all_stations(cfg):
+    raw = cfg.get("stations")
+    if not isinstance(raw, list):
+        return []
+    return [dict(s) for s in raw if isinstance(s, dict)]
+
+
+def load_stations_cfg(cfg):
+    return [s for s in get_all_stations(cfg) if s.get("enabled", True)]
+
+
+def station_slug(name, existing=()):
+    slug = _slugify(name or "station") or "station"
+    base = slug
+    i = 1
+    while slug in existing:
+        slug = f"{base}-{i}"
+        i += 1
+    return slug
+
+
+def _station_record(station):
+    rec = {k: station[k] for k in STATION_FIELDS if k in station}
+    rec.setdefault("name", rec.get("url", "station"))
+    rec.setdefault("enabled", True)
+    rec["tags"] = list(rec.get("tags") or [])
+    return rec
+
+
+def station_add(cfg, station):
+    """Add or update a saved station. Returns its slug."""
+    rec = _station_record(station)
+    if not isinstance(cfg.get("stations"), list):
+        cfg["stations"] = []
+    stations = cfg["stations"]
+    for existing in stations:
+        same_uuid = bool(rec.get("stationuuid")) and \
+            existing.get("stationuuid") == rec.get("stationuuid")
+        if same_uuid or existing.get("url") == rec.get("url"):
+            existing.update({k: v for k, v in rec.items() if k != "slug"})
+            save_config(cfg)
+            return existing.get("slug", "")
+    slug = station_slug(rec.get("name") or rec.get("url"),
+                        {s.get("slug") for s in stations})
+    stations.append({**rec, "slug": slug})
+    save_config(cfg)
+    return slug
+
+
+def station_delete(cfg, slug):
+    cfg["stations"] = [s for s in get_all_stations(cfg)
+                       if s.get("slug") != slug]
+    save_config(cfg)
+
+
+def station_toggle(cfg, slug, enable):
+    if not isinstance(cfg.get("stations"), list):
+        return
+    for station in cfg["stations"]:
+        if station.get("slug") == slug:
+            station["enabled"] = enable
+    save_config(cfg)
+
+
+def station_for_url(url):
+    for station in get_all_stations(load_config()):
+        if station.get("url") == url:
+            return station
+    return None
+
+
+def resolve_station(query, stations):
+    q = (query or "").lower().strip()
+    for station in stations:
+        if station.get("slug") == q:
+            return station
+    for station in stations:
+        if q in station.get("slug", "") or q in station.get("name", "").lower():
+            return station
+    return None
+
+
+def resolve_music_target(cfg, name):
+    """music/<slug> dispatch: YouTube presets win over saved stations."""
+    settings, presets = load_radio_cfg(cfg)
+    info = resolve_preset(name, presets)
+    if info:
+        return ("radio", info, settings)
+    station = resolve_station(name, load_stations_cfg(cfg))
+    if station:
+        return ("station", station, None)
+    return None
+
+
+# --- station playback ---
+
+def build_station_cmd(station):
+    """Audio-only mpv command for a live stream; no yt-dlp extraction."""
+    return ["mpv", "--force-window=no", "--vid=no", "--video=no",
+            "--audio-display=no", station["url"]]
+
+
+def _station_play(cfg, station, stop_fn=stop_shared):
+    stop_fn()
+    title = station.get("name") or station.get("url", "Station")
+    NOW_PLAYING[0] = {"title": title, "kind": "station",
+                      "replay": lambda: _station_play(cfg, station, stop_fn)}
+    PLAYER_PROC[0] = launch_player(build_station_cmd(station))
+    done = threading.Event()
+    IPC_DONE[0] = done
+    threading.Thread(target=_ipc_watch, args=(title, done), daemon=True).start()
+    add_to_history({"title": title, "url": station.get("url", ""),
+                    "uploader": station.get("countrycode") or "Radio",
+                    "kind": "station"}, cfg["history_size"])
+    report_station_click(station.get("stationuuid"))
+
+
+def _station_cli_play(station, flags=None):
+    flags = flags or {}
+    cmd = build_station_cmd(station)
+    if flags.get("background"):
+        subprocess.Popen(cmd, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL, start_new_session=True)
+        print(f"  {C.PLAY}  Started in background: "
+              f"{station.get('name', station['url'])}")
+    else:
+        subprocess.run(cmd)
+
+
+# --- stations UI ---
+
+def format_station_row(station, now_playing_name=None):
+    name = (station.get("name") or "?").strip()
+    if len(name) > 30:
+        name = name[:29] + "…"
+    marker = C.PLAY if name == now_playing_name else " "
+    country = (station.get("countrycode") or "--")[:2]
+    tags = ", ".join(station.get("tags") or [])[:20] or "-"
+    codec = station.get("codec") or "?"
+    bitrate = f"{station['bitrate']}k" if station.get("bitrate") else "-"
+    meta = f"{country:<2}  {tags:<20}  {codec} {bitrate}"
+    return f"{marker}  {name:<30}  {c(C.DIM, meta)}"
+
+
+def pick_station(stations, now_playing_name, ui):
+    lines = ["  🔍  Search stations..."]
+    index_map = [("search", None)]
+    for station in stations:
+        lines.append(format_station_row(station, now_playing_name))
+        index_map.append(("station", station))
+    lines.append("  ⚙   manage stations")
+    index_map.append(("manage", None))
+    header = ("yt-cli · Stations" + "\n" + "─" * 48 + "\n" +
+              "Esc → back   ·   type to filter or search radio-browser.info")
+    query, idx = ui.pick_query(lines, "station ❯ ", header, "70%")
+    if idx is not None and 0 <= idx < len(index_map):
+        kind, value = index_map[idx]
+        if kind == "search":
+            q = ui.query(["Stations · search radio-browser.info",
+                          "─" * 48, "Esc → back"])
+            if not q or not q.strip():
+                return None
+            q = q.strip()
+            return ("url", q) if looks_like_url(q) else ("search", q)
+        return (kind, value)
+    q = query.strip()
+    if not q:
+        return None
+    if q.lower() in ("manage stations", "manage", "m"):
+        return ("manage", None)
+    return ("url", q) if looks_like_url(q) else ("search", q)
+
+
+def pick_station_results(results, query, ui):
+    if not results:
+        action = ui.action([f'No stations for "{query}"', "─" * 44],
+                           [("retry search", "r"), ("back", "b")])
+        return "retry" if action == "r" else None
+    lines = [format_station_row(station) for station in results]
+    header = (f"Stations · {c(C.BOLD, query)} ({len(results)})" + "\n" +
+              "─" * 48 + "\n" + "Esc → back")
+    idx = ui.pick(lines, "result ❯ ", header, "70%")
+    if idx is None:
+        return None
+    return results[idx]
+
+
+def _station_search_pick(ui, query):
+    while True:
+        clear_screen()
+        sp = Spinner(f"Searching radio-browser.info for '{query}'...")
+        sp.start()
+        try:
+            results = search_stations(query)
+        except SearchError as e:
+            sp.fail(str(e))
+            if ui.action([f"Search failed: {e}", "─" * 44],
+                         [("retry search", "r"), ("back", "b")]) != "r":
+                return None
+            continue
+        if results:
+            sp.done(f"Found {len(results)} station(s)")
+        else:
+            sp.fail("No stations found")
+        picked = pick_station_results(results, query, ui)
+        if picked == "retry":
+            continue
+        return picked
+
+
+def prompt_save_station(cfg, ui, station):
+    title = station.get("name") or station.get("url", "station")
+    action = ui.action([f'Save "{title}" as a station?', "─" * 48],
+                       [("yes, save station", "yes"), ("no, discard", "no")])
+    if action != "yes":
+        return None
+    ui.info([f'Save "{title}"', "",
+             "Display name (Enter to use station name):"], wait=False)
+    name = ui.prompt("name") or title
+    slug = station_add(cfg, {**station, "name": name})
+    ui.info([f"✓  Saved as [station.{slug}]"], wait=False)
+
+    sym_path = _find_bin_dir() / slug
+    create = ui.action([f'Create symlink "{name}"?',
+                        f"  {sym_path}  →  yt-cli {slug}", "─" * 48],
+                       [("yes, create symlink", "yes"),
+                        ("no, skip", "no")]) == "yes"
+    if create:
+        tune_path = Path(sys.argv[0]).resolve()
+        try:
+            if sym_path.is_symlink() or sym_path.exists():
+                if sym_path.resolve() == tune_path:
+                    ui.info([f"✓  Already linked: {sym_path}"], wait=False)
+                else:
+                    ui.info([f"⚠  Link exists, not overwritten: {sym_path}"],
+                            wait=False)
+            else:
+                sym_path.symlink_to(tune_path)
+                ui.info([f"✓  {sym_path}"], wait=False)
+        except OSError as e:
+            ui.info([f"⚠  Symlink failed: {e}"], wait=False)
+    time.sleep(0.8)
+    return slug
+
+
+def manage_stations_screen(cfg, ui):
+    while True:
+        all_stations = get_all_stations(cfg)
+        if not all_stations:
+            ui.info(["No saved stations."])
+            break
+        lines = []
+        index_map = []
+        for station in all_stations:
+            status = c(C.GREEN, "●") if station.get("enabled", True) \
+                else c(C.DIM, "○")
+            lines.append(f"{status}  {station.get('name', '?')}  "
+                         f"{c(C.DIM, '[' + station.get('slug', '') + ']')}")
+            index_map.append(station)
+        idx = ui.pick(lines, "station ❯ ",
+                      "Manage stations\n" + "─" * 44 + "\nEsc → back", "70%")
+        if idx is None:
+            break
+        target = index_map[idx]
+        toggle = "disable" if target.get("enabled", True) else "enable"
+        action = ui.action([f"{target.get('name', '?')}  "
+                            f"[{target.get('slug', '')}]", "─" * 44],
+                           [(toggle, toggle), ("remove", "remove"),
+                            ("back", "back")])
+        if action == "back":
+            continue
+        if action == "remove":
+            confirmed = ui.action([f'Remove "{target.get("name", "?")}"?',
+                                   "─" * 44],
+                                  [("yes, remove", "yes"),
+                                   ("no, keep", "no")]) == "yes"
+            if confirmed:
+                station_delete(cfg, target.get("slug", ""))
+                ui.info([f"✓  Removed {target.get('name', '?')}"], wait=False)
+        elif action in ("enable", "disable"):
+            station_toggle(cfg, target.get("slug", ""),
+                           enable=(action == "enable"))
+            ui.info([f"✓  {target.get('name', '?')} is now {action}d"],
+                    wait=False)
+    return load_stations_cfg(load_config())
+
+
+PLAY_ACTIONS_STATION = [
+    ("other results", "o"),
+    ("new search", "s"),
+    ("history", "h"),
+    ("replay", "r"),
+    ("go to…", "g"),
+    ("stop player", "q"),
+    ("exit", "x"),
+    ("keep (save)", "k"),
+    ("detach & exit", "d"),
+]
+
+
+def station_playing_loop(cfg, ui, station, stop_fn, play_fn, goodbye_fn):
+    while True:
+        name = station.get("name") or station.get("url", "")
+        tags = ", ".join(station.get("tags") or [])[:40] or "-"
+        codec = station.get("codec") or "?"
+        bitrate = f"{station['bitrate']}k" if station.get("bitrate") else "-"
+        header_lines = [
+            f"▶  {c(C.BOLD, name[:60])}",
+            f"   {c(C.DIM, 'Country')} : "
+            f"{station.get('countrycode') or '--'}   "
+            f"{c(C.DIM, 'Codec')} : {codec}   "
+            f"{c(C.DIM, 'Bitrate')} : {bitrate}",
+            f"   {c(C.DIM, tags)}",
+        ]
+        if PLAYER_PROC[0] is not None and PLAYER_PROC[0].poll() is not None:
+            header_lines.append(f"   {c(C.YELLOW, '⚠  Player exited.')}")
+        actions = PLAY_ACTIONS_STATION if not station.get("slug") else \
+            [a for a in PLAY_ACTIONS_STATION if a[1] != "k"]
+        action = ui.action(header_lines, actions)
+        if action == "o":
+            return False
+        if action == "s":
+            q = ui.query(["Stations · search radio-browser.info",
+                          "─" * 48, "Esc → back"])
+            if q and q.strip():
+                q = q.strip()
+                if looks_like_url(q):
+                    new_station = {"name": q[:60], "url": q}
+                else:
+                    new_station = _station_search_pick(ui, q)
+                if new_station:
+                    station = new_station
+                    play_fn(station)
+            continue
+        if action == "h":
+            run_history_screen(cfg, ui, stop_fn, _search_play_default(cfg))
+        elif action == "r":
+            play_fn(station)
+        elif action == "g":
+            dest = go_to_picker(ui)
+            if dest:
+                raise GoTo(dest)
+        elif action == "k":
+            slug = prompt_save_station(cfg, ui, station)
+            if slug and not station.get("slug"):
+                station = {**station, "slug": slug}
+            cfg = load_config()
+        elif action == "d":
+            print(f"\n  {c(C.GREEN, '▶')}  "
+                  f"{c(C.DIM, 'detached · playing in background')}\n")
+            sys.exit(0)
+        elif action == "q":
+            stop_fn()
+            return True
+        elif action == "x":
+            goodbye_fn()
+            sys.exit(0)
+
+
+def run_stations_mode(cfg, ui, stop, goodbye, on_esc="quit"):
+    while True:
+        stations = load_stations_cfg(cfg)
+        now = NOW_PLAYING[0]
+        np_name = now.get("title") if now and now.get("kind") == "station" \
+            else None
+        result = pick_station(stations, np_name, ui)
+        if result is None:
+            if on_esc == "home":
+                return            # back to main menu, player keeps playing
+            goodbye()
+            return
+
+        kind, value = result
+        if kind == "manage":
+            manage_stations_screen(cfg, ui)
+            cfg = load_config()
+            continue
+        if kind == "url":
+            url = value if isinstance(value, str) else ""
+            station = {"name": url[:60], "url": url}
+        elif kind == "search":
+            station = _station_search_pick(ui, value)
+            if station is None:
+                continue
+        else:
+            station = value
+
+        def play_fn(st):
+            _station_play(cfg, st, stop_fn=stop)
+
+        play_fn(station)
+        station_playing_loop(cfg, ui, station, stop, play_fn, goodbye)
+        cfg = load_config()
+
 
 # ---------- MODE: NEWS ----------
 
@@ -2483,7 +3079,7 @@ def pick_source(sources, ui):
     lines = [info['name'] for key, info in source_list]
     MANAGE = "manage sources"
     lines.append(f"⚙   {MANAGE}")
-    header = ("yt-cli  —  news: select a source or type to search YouTube\n" +
+    header = ("yt-cli · news: select a source or type to search YouTube\n" +
               "─" * 48 + "\n" +
               "Esc → quit")
     query, idx = ui.pick_query(lines, "source ❯ ", header, "60%")
@@ -2502,7 +3098,7 @@ def pick_source(sources, ui):
 
 def pick_stream(streams, source_name, ui):
     if not streams:
-        action = ui.action([f"{source_name}  —  no streams found", "─" * 40],
+        action = ui.action([f"{source_name} · no streams found", "─" * 40],
                            [("retry", "r"), ("back", "b"), ("quit", "q")])
         if action == "r":
             return "retry"
@@ -2513,7 +3109,7 @@ def pick_stream(streams, source_name, ui):
         views = f"  {c(C.DIM, '👥 ' + stream['view_count'])}" if stream["view_count"] else ""
         lines.append(f"{badge}  {stream['title']}{views}")
     idx = ui.pick(lines, "stream ❯ ",
-                  f"{source_name}  —  {len(streams)} stream(s) found\n{'─' * 40}\nEsc → back",
+                  f"{source_name} · {len(streams)} stream(s) found\n{'─' * 40}\nEsc → back",
                   "60%")
     if idx is None:
         return None
@@ -2574,7 +3170,7 @@ def manage_sources_screen(cfg, ui):
 
 def run_news_mode(cfg, ui, stop, goodbye, on_esc="quit"):
     settings, sources = load_news_cfg(cfg)
-    current_stream = [None]
+    current_stream: list = [None]
     player = [settings["player"]]
 
     def resolve_player():
@@ -2599,7 +3195,7 @@ def run_news_mode(cfg, ui, stop, goodbye, on_esc="quit"):
             if direct_url:
                 sp.done('On air')
             else:
-                sp.fail('Resolving failed — using watch URL')
+                sp.fail('Resolving failed: using watch URL')
         PLAYER_PROC[0] = launch_news_player(stream['url'], pl,
                                             settings['quality'], direct_url=direct_url)
         current_stream[0] = stream
@@ -2654,7 +3250,7 @@ def run_news_mode(cfg, ui, stop, goodbye, on_esc="quit"):
                         if dest:
                             raise GoTo(dest)
                     elif action == "d":
-                        print(f"\n  {c(C.GREEN, '▶')}  {c(C.DIM, 'detached — playing in background')}\n")
+                        print(f"\n  {c(C.GREEN, '▶')}  {c(C.DIM, 'detached · playing in background')}\n")
                         sys.exit(0)
                     elif action == "q":
                         stop()
@@ -2666,16 +3262,21 @@ def run_news_mode(cfg, ui, stop, goodbye, on_esc="quit"):
                         break
             continue
 
+        source_info: dict = {}
         if isinstance(result, tuple) and result[0] == "search":
-            query = result[1]
+            query = str(result[1] or "")
             if not confirm_search(query, ui):
                 continue
             source_info = {"name": query, "channel_id": None,
                            "keywords": [w.lower() for w in query.split()],
-                           "fallback_url": f"https://www.youtube.com/results?search_query={urllib.parse.quote(query)}"}
+                           "fallback_url": "https://www.youtube.com/results?search_query="
+                                           + urllib.parse.quote(query)}
             is_search_result = True
         else:
-            source_key, source_info = result
+            raw_info = result[1] if isinstance(result, tuple) else None
+            if not isinstance(raw_info, dict):
+                continue
+            source_info = raw_info
             is_search_result = False
 
         while True:
@@ -2729,7 +3330,7 @@ def run_news_mode(cfg, ui, stop, goodbye, on_esc="quit"):
                     ]
                     if PLAYER_PROC[0] is not None and PLAYER_PROC[0].poll() is not None:
                         header_lines.append(
-                            f"   {c(C.YELLOW, '⚠  Player exited — stream may have ended.')}")
+                            f"   {c(C.YELLOW, '⚠  Player exited: stream may have ended.')}")
                     actions = PLAY_ACTIONS_NEWS if is_search_result else \
                         [a for a in PLAY_ACTIONS_NEWS if a[1] != "k"]
                     action = ui.action(header_lines, actions)
@@ -2767,7 +3368,7 @@ def run_news_mode(cfg, ui, stop, goodbye, on_esc="quit"):
                         if dest:
                             raise GoTo(dest)
                     elif action == "d":
-                        print(f"\n  {c(C.GREEN, '▶')}  {c(C.DIM, 'detached — playing in background')}\n")
+                        print(f"\n  {c(C.GREEN, '▶')}  {c(C.DIM, 'detached · playing in background')}\n")
                         sys.exit(0)
                     elif action == "q":
                         stop()
@@ -2830,7 +3431,7 @@ USAGE:
 SUPPORTED SOURCES:""")
     for key, info in sorted(sources.items()):
         print(f"    {'✓' if info['enabled'] else '✗'}  {key:<25} - {info['name']}")
-    print(f"""
+    print("""
 PLAYERS:
     auto  mpv  vlc  ffplay
 
@@ -2898,7 +3499,7 @@ def print_radio_help(presets):
     for slug, info in presets.items():
         categories.setdefault(info["category"], []).append((slug, info["name"]))
     print(f"""
-🎵 RADIO — Music preset player (yt-cli)
+🎵 RADIO · Music preset player (yt-cli)
 
 CONFIG: {CONFIG_PATH}
 
@@ -2930,8 +3531,9 @@ PRESETS:""")
 
 # ---------- entry point ----------
 
-def check_dependencies():
-    missing = [tool for tool in ("mpv", "yt-dlp") if not shutil.which(tool)]
+def check_dependencies(need_ytdlp=True):
+    tools = ("mpv", "yt-dlp") if need_ytdlp else ("mpv",)
+    missing = [tool for tool in tools if not shutil.which(tool)]
     if missing:
         print(f"error: required tool(s) not found on PATH: {', '.join(missing)}", file=sys.stderr)
         sys.exit(1)
@@ -2953,7 +3555,7 @@ def _radio_cli_main():
         categories = {}
         for slug, info in presets.items():
             categories.setdefault(info["category"], []).append((slug, info))
-        print(f"\n{c(C.BOLD + C.CYAN, '🎵  radio')}  —  presets\n")
+        print(f"\n{c(C.BOLD + C.CYAN, '🎵  radio')}  ·  presets\n")
         for cat, items in categories.items():
             print(f"  {c(C.DIM + C.BOLD, cat)}")
             for slug, info in items:
@@ -3045,6 +3647,81 @@ def _news_cli_main():
     play_stream_cli(stream["url"], player, quality, direct_url=direct_url)
 
 
+def print_stations_help(stations):
+    print(f"""
+📻 STATIONS · Internet radio (radio-browser.info)
+
+CONFIG: {CONFIG_PATH}
+
+USAGE:
+    yt-cli --stations / -s              Stations TUI
+    yt-cli --stations <slug|url>        Play a saved station or stream URL
+    yt-cli --stations --list
+    yt-cli --stations --config
+    yt-cli --stations --help
+
+OPTIONS:
+    --bg, --background     Run in background
+    --fg, --foreground     Run in foreground
+
+SAVED STATIONS:""")
+    if not stations:
+        print("    (none yet: search in the TUI and press k to keep)")
+    for station in stations:
+        name = station.get("name", "?")
+        slug = station.get("slug", "")
+        print(f"    {slug:<28}  {name}")
+
+
+def run_stations_cli():
+    cfg = load_config()
+    stations = get_all_stations(cfg)
+    args = sys.argv[1:]
+
+    if not args:
+        run_fzf(cfg, mode="stations")
+        return
+
+    if args[0] in ("--help", "-h", "help"):
+        print_stations_help(stations)
+        sys.exit(0)
+
+    if args[0] in ("--list", "-l", "list"):
+        print(f"\n{c(C.BOLD + C.CYAN, '📻  stations')}  ·  saved\n")
+        if not stations:
+            print(f"  {c(C.DIM, 'no saved stations yet')}")
+        for station in stations:
+            status = "●" if station.get("enabled", True) else "○"
+            bitrate = (f"{station['bitrate']}k"
+                       if station.get("bitrate") else "-")
+            meta = (f"{station.get('countrycode') or '--'}  "
+                    f"{station.get('codec') or '?'} {bitrate}")
+            print(f"  {status}  {c(C.CYAN, station.get('slug', '')):<30}  "
+                  f"{station.get('name', '?')}  {c(C.DIM, meta)}")
+        print()
+        sys.exit(0)
+
+    if args[0] in ("--config", "-c", "config", "--edit"):
+        subprocess.run([os.environ.get("EDITOR", "nano"), str(CONFIG_PATH)])
+        sys.exit(0)
+
+    query = args[0]
+    flags, _rest = parse_cli_flags(args[1:])
+
+    if looks_like_url(query):
+        station = {"name": query[:60], "url": query}
+    else:
+        station = resolve_station(query, load_stations_cfg(cfg))
+        if station is None:
+            print(f"❌ Unknown station: '{query}'")
+            suggestions = [s.get("slug", "") for s in stations
+                           if query.replace("-", "") in s.get("slug", "").replace("-", "")]
+            if suggestions:
+                print(f"   Did you mean: {', '.join(suggestions[:4])}")
+            sys.exit(1)
+    _station_cli_play(station, flags)
+
+
 def run_curses(cfg, mode=None):
     """Universal curses fallback entry (fzf missing)."""
     curses.wrapper(_curses_main, cfg, mode)
@@ -3058,18 +3735,19 @@ def _curses_main(stdscr, cfg, mode):
         stop_shared()
         _curses_ui_message(stdscr, ["Goodbye! 👋"])
 
-    if mode in ("radio", "news"):
-        _run_mode_loop(cfg, ui, "Radio" if mode == "radio" else "News",
-                       stop_shared, play_mpv, goodbye)
+    if mode in ("radio", "stations", "news"):
+        dest = {"radio": "Radio", "stations": "Stations",
+                "news": "News"}[mode]
+        _run_mode_loop(cfg, ui, dest, stop_shared, play_mpv, goodbye)
         return
 
     detached = False
     while True:
-        entries = ["Search", "Radio", "News", "History"]
+        entries = ["Search", "Radio", "Stations", "News", "History"]
         if player_active():
             entries.insert(0, "▶ Now Playing")
         entries.append("Exit")
-        idx = ui.pick(entries, "main ❯ ", "yt-cli  —  unified search / radio / news", "50%")
+        idx = ui.pick(entries, "main ❯ ", "yt-cli · search / radio / stations / news", "50%")
         if idx is None:
             break
         choice = entries[idx]
@@ -3109,15 +3787,19 @@ def _curses_ui_message(stdscr, lines):
 
 
 def main():
-    check_dependencies()
+    args = sys.argv[1:]
+    stations_flag = bool(args) and args[0] in ("--stations", "-s")
+    check_dependencies(need_ytdlp=not stations_flag)
     migrate_configs()
     script_name = Path(sys.argv[0]).name
 
-    args = sys.argv[1:]
     if script_name == "tune":
         _radio_cli_main()
     elif script_name == "news-stream":
         _news_cli_main()
+    elif stations_flag:
+        sys.argv = [sys.argv[0]] + args[1:]
+        run_stations_cli()
     elif args and args[0] in ("--radio", "-r"):
         sys.argv = [sys.argv[0]] + args[1:]
         _radio_cli_main()
@@ -3125,16 +3807,19 @@ def main():
         sys.argv = [sys.argv[0]] + args[1:]
         _news_cli_main()
     else:
-        # yt-cli or a radio preset symlink (music/<preset>)
+        # yt-cli, a radio preset symlink, or a saved-station symlink
         cfg = load_config()
         if script_name != "yt-cli":
-            settings, presets = load_radio_cfg(cfg)
             flags, _ = parse_cli_flags(args)
-            info = resolve_preset(script_name, presets)
-            if not info:
-                print(f"❌ No preset found for '{script_name}'")
+            target = resolve_music_target(cfg, script_name)
+            if target is None:
+                print(f"❌ No preset or station found for '{script_name}'")
                 sys.exit(1)
-            cli_play(info, settings, flags)
+            kind, info, settings = target
+            if kind == "station":
+                _station_cli_play(info, flags)
+            else:
+                cli_play(info, settings, flags)
             return
         attach_detached()         # reattach to a player left running
         if find_fzf():

@@ -7,7 +7,7 @@ from pty_harness import Harness
 
 YT_CLI = str(HERE.parents[1] / "yt-cli")
 h = Harness([YT_CLI], name="probe")
-h.wait_for("unified search / radio / news", 15, silent=True)
+h.wait_for("search / radio / stations / news", 15, silent=True)
 h.send("s\r", 0.5)
 time.sleep(6)
 h.read(0.5)

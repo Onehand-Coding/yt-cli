@@ -44,3 +44,21 @@ def test_news_help_exits_zero():
     assert r.returncode == 0
     out = (r.stdout + r.stderr).lower()
     assert "news" in out or "source" in out or "usage" in out or "help" in out
+
+
+@pytest.mark.skipif(not shutil.which("mpv"),
+                    reason="mpv required for check_dependencies")
+def test_stations_help_exits_zero():
+    r = run("--stations", "--help")
+    assert r.returncode == 0
+    out = (r.stdout + r.stderr).lower()
+    assert "stations" in out and "radio-browser" in out
+
+
+@pytest.mark.skipif(not shutil.which("mpv"),
+                    reason="mpv required for check_dependencies")
+def test_stations_list_exits_zero():
+    r = run("--stations", "--list")
+    assert r.returncode == 0
+    out = (r.stdout + r.stderr).lower()
+    assert "station" in out

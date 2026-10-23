@@ -91,7 +91,7 @@ def main():
             ok3 = False
         h.send("go\r", 0.4)
         ok3 &= h.wait_new("go to ❯", 10)
-        h.send("2\r", 0.4)
+        h.send("3\r", 0.4)              # go-to: Radio, Stations, News
         ok3 &= h.wait_new("source ❯", 15)
         time.sleep(1.0)
         mpv_after = subprocess.run(["pgrep", "-x", "mpv"],

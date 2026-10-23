@@ -10,7 +10,7 @@ YT_CLI = str(HERE.parents[1] / "yt-cli")
 def flow_a():
     h = Harness([YT_CLI], name="main")
     ok = True
-    ok &= h.wait_for("unified search / radio / news", 15)
+    ok &= h.wait_for("search / radio / stations / news", 15)
     h.send("s\r", 0.4)
     ok &= h.wait_for("search YouTube", 8)
     h.send("acdc thunderstruck\r", 0.02)
@@ -28,7 +28,7 @@ def flow_a():
     h.send("\x1b", 0.4)
     ok &= h.wait_for("action", 8, silent=True)
     h.send("q\r", 0.4)
-    ok &= h.wait_for("unified search / radio / news", 10)
+    ok &= h.wait_for("search / radio / stations / news", 10)
     h.send("x\r", 0.4)
     time.sleep(2)
     h.read(1)
