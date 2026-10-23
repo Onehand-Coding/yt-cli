@@ -19,6 +19,8 @@ search from any mode, shared history, config migration from the old INI files,
 and a universal curses fallback (used by ALL modes when `fzf` is unavailable).
 Music symlinks in `~/.local/bin/music/` point to `../yt-cli` — running
 `music/lofi` resolves the "lofi" preset by argv[0] name and plays it.
+Saved-station symlinks use the same directory and dispatch: `music/<slug>`
+falls back to `config.json` `stations` when no radio preset matches.
 
 ## Location
 
@@ -40,8 +42,8 @@ directly at the wrapper file — still correct. E2E harness: `tests/e2e/`. Proje
 - **Watcher** — `_ipc_watch(name, done)` is a daemon thread that connects to
   mpv's IPC socket (`/tmp/mpvsocket`, set in mpv.conf), spins
   Resolving→Buffering→`▶ playing`; event-phase deadline 60s from connect.
-- **Modes** — `run_radio_mode`/`run_news_mode`/`run_search_mode` share the
-  action-menu loop. Action-menu loop is the OUTER loop, results/preset picker
+- **Modes** — `run_radio_mode`/`run_stations_mode`/`run_news_mode`/`run_search_mode`
+  share the action-menu loop. Action-menu loop is the OUTER loop, results/preset picker
   INNER; Esc from a picker with a live player returns to the action menu;
   `q` stops and returns home; `x` exits. Esc at the radio preset / news
   source list goes HOME keeping playback when launched from the main menu
@@ -56,6 +58,8 @@ directly at the wrapper file — still correct. E2E harness: `tests/e2e/`. Proje
 
 - `load_config` deep-merges without mutating `DEFAULT_CONFIG`:
   `merged[k] = {**DEFAULT_CONFIG[k], **v}` (was shallow-copy + `.update`).
+  The no-config path uses `copy.deepcopy(DEFAULT_CONFIG)`: a shallow `dict()`
+  shared the `stations` list, so saves leaked into every later fresh config.
 - **Radio universal search** (`s` from radio action menu): `run_search_mode`
   passes SEARCH-format items (`title`/`url`) to the radio play function, which
   requires radio-format (`name`). Fixed with a `play_search` adapter in
@@ -107,8 +111,9 @@ directly at the wrapper file — still correct. E2E harness: `tests/e2e/`. Proje
 
 `tests/e2e/pty_harness.py` + `flow_a.py` (search/actions),
 `flow_b.py` (radio + universal search, via `yt-cli --radio`), `flow_c.py`
-(news, via `yt-cli --news`), `flow_d.py` (curses fallback via fzf-free PATH).
-All four PASS on the merged script. Run: `python3 flow_*.py` (kills stray
+(news, via `yt-cli --news`), `flow_d.py` (curses fallback via fzf-free PATH),
+`flow_f.py` (Stations with an isolated `HOME`; no network/playback).
+All five PASS on the merged script. Run: `python3 flow_*.py` (kills stray
 mpv/fzf first; each takes 1-5 min; requires network). Harness gotchas from
 the yt-cli2 work, still valid for any fzf-flow testing:
 - `FzfUI.action` labels are NOT numbered — select by typing label text
@@ -195,3 +200,71 @@ save key) was built and fully E2E-tested, then DELETED at user decision —
 too much churn; flaws get fixed in `yt-cli` directly instead. Nothing of it
 remains (library.json removed; config.json never touched, md5-verified).
 Transferable gotchas live in the E2E harness section below.
+
+## Stations mode: real internet radio (2026-10-23)
+
+Spec: `docs/specs/2026-10-23-stations-mode-design.md`.
+
+- **Source**: radio-browser.info JSON API (no key, stdlib `urllib` only).
+  `_rb_hosts()` discovers mirror names via reverse DNS on
+  `all.api.radio-browser.info`, shuffles them, appends `de1/de2/nl1`
+  fallbacks, and puts the last successful host first. `_rb_get` tries the
+  first 3 hosts, so one dead mirror never fails a search. UA is
+  `yt-cli/1.1`; `report_station_click()` posts the play event in a daemon
+  thread and is best-effort.
+- **Search**: `/json/stations/search` by `name` (limit 30, `hidebroken`,
+  order by clickcount), falling back to a `tag` query when fewer than 8
+  name hits; both lists merge and dedupe by `stationuuid` (name+URL when
+  absent), ranked by clicks then votes. Results are cached per process in
+  `_STATION_SEARCH_CACHE` keyed by lowercased query. `url_resolved` always
+  wins over `url`; non-http(s) and blank-name records are dropped.
+- **Storage**: top-level `stations` list in `config.json` (additive, no
+  migration; a non-list value is coerced to `[]`). Fields: slug, name,
+  url, stationuuid, countrycode, tags, codec, bitrate, homepage, favicon,
+  enabled. `station_add` dedupes by stationuuid then URL and updates in
+  place, otherwise appends with a unique slug. `enabled: false` hides a
+  station from the picker but keeps it in `--list`/manage. Symlinks for
+  saved stations live in `~/.local/bin/music/` beside radio presets.
+  `resolve_music_target` checks YouTube presets FIRST, then stations.
+- **Playback**: `build_station_cmd` runs mpv audio-only
+  (`--force-window=no --vid=no --video=no --audio-display=no`), with
+  `--keep-open=no --save-position-on-quit=no --no-resume-playback` to
+  override the user's global mpv.conf (`keep-open=yes` would leave a
+  silent player alive after the stream ends), `--network-timeout=15`,
+  `--ytdl=no` (direct streams; never probes yt-dlp) and an explicit
+  `--input-ipc-server`. `check_dependencies` only requires mpv for
+  `--stations`, and saved-station symlinks resolve before the check, so
+  they work without yt-dlp installed. History entries carry
+  `kind: "station"`, and `now_playing_screen` hides "toggle video" for
+  them. `attach_detached`/`relaunch_detached` map the IPC path back to a
+  saved station so a detached stream reattaches as audio, not as a
+  YouTube video.
+- **Stream resilience**: `_ipc_watch` follows the player's IPC events for
+  the whole station playback and records the `end-file` reason. A
+  `_station_supervise` thread polls every 2s and relaunches on `eof` /
+  `error` with a 2s-per-failure backoff (capped at 10s), giving up after
+  5 consecutive fast failures; a player that survives one poll resets
+  the counter, so flaky stations reconnect indefinitely. Reasons `quit`
+  and `stop` mean the user closed mpv and are honored: no relaunch.
+  `STATION_GEN` invalidates stale supervisors on any play/stop, and
+  reconnects are silent (no spinner or "playing" banner over the menu).
+- **Now playing**: `station_song_title` reads
+  `metadata/by-key/icy-title` (falling back to `media-title`) over IPC,
+  after checking the player's `path` is the station URL, and the action
+  menu header shows `♪ Artist - Title` when the stream publishes ICY
+  metadata.
+- **CLI/UI**: `--stations` / `-s` opens the TUI; `--stations <slug|url>`
+  plays directly (accepts `--bg`), plus `--list`, `--help`, `--config`.
+  Main menu is Search / Radio / Stations / News / History / Exit; go-to
+  offers Radio / Stations / News / Search / Home. Modes keep the shared
+  Esc semantics (`on_esc="home"` from the main menu).
+- **UI cleanup**: list numbers and result-type labels dimmed; user-facing
+  header separators use `·` instead of em-dashes (source comments keep
+  theirs). Emoji were kept at the user's request.
+- **Tests**: `tests/test_stations.py` (normalize/merge/search/cache/cmd/
+  add-toggle-delete/slug/resolve precedence/play/history, no network) and
+  `tests/e2e/flow_f.py` (isolated `HOME`; `--stations --list` plus
+  main → Stations → Esc → Exit). Curse-suite note: `flow_d.py` now expects
+  the new header and asserts `YouTube` (not `search YouTube`) because
+  curses diff-renders only the tail of a line whose prefix matches the
+  previous frame.

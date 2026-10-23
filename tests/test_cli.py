@@ -28,8 +28,10 @@ def test_shebang_is_python3():
     assert first == "#!/usr/bin/env python3"
 
 
-@pytest.mark.skipif(not shutil.which("mpv") or not shutil.which("yt-dlp"),
-                    reason="mpv and yt-dlp required for check_dependencies")
+@pytest.mark.skipif(
+    not shutil.which("mpv") or not shutil.which("yt-dlp"),
+    reason="mpv and yt-dlp required for check_dependencies",
+)
 def test_radio_help_exits_zero():
     r = run("--radio", "--help")
     assert r.returncode == 0
@@ -37,10 +39,28 @@ def test_radio_help_exits_zero():
     assert "radio" in out or "preset" in out or "usage" in out or "help" in out
 
 
-@pytest.mark.skipif(not shutil.which("mpv") or not shutil.which("yt-dlp"),
-                    reason="mpv and yt-dlp required for check_dependencies")
+@pytest.mark.skipif(
+    not shutil.which("mpv") or not shutil.which("yt-dlp"),
+    reason="mpv and yt-dlp required for check_dependencies",
+)
 def test_news_help_exits_zero():
     r = run("--news", "--help")
     assert r.returncode == 0
     out = (r.stdout + r.stderr).lower()
     assert "news" in out or "source" in out or "usage" in out or "help" in out
+
+
+@pytest.mark.skipif(not shutil.which("mpv"), reason="mpv required for check_dependencies")
+def test_stations_help_exits_zero():
+    r = run("--stations", "--help")
+    assert r.returncode == 0
+    out = (r.stdout + r.stderr).lower()
+    assert "stations" in out and "radio-browser" in out
+
+
+@pytest.mark.skipif(not shutil.which("mpv"), reason="mpv required for check_dependencies")
+def test_stations_list_exits_zero():
+    r = run("--stations", "--list")
+    assert r.returncode == 0
+    out = (r.stdout + r.stderr).lower()
+    assert "station" in out
