@@ -227,13 +227,32 @@ Spec: `docs/specs/2026-10-23-stations-mode-design.md`.
   saved stations live in `~/.local/bin/music/` beside radio presets.
   `resolve_music_target` checks YouTube presets FIRST, then stations.
 - **Playback**: `build_station_cmd` runs mpv audio-only
-  (`--force-window=no --vid=no --video=no --audio-display=no <stream>`);
-  no yt-dlp extraction. `check_dependencies` only requires mpv for
-  `--stations` (yt-dlp stays required everywhere else). History entries
-  carry `kind: "station"`, and `now_playing_screen` hides "toggle video"
-  for them. `attach_detached`/`relaunch_detached` map the IPC path back to
-  a saved station so a detached stream reattaches as audio, not as a
+  (`--force-window=no --vid=no --video=no --audio-display=no`), with
+  `--keep-open=no --save-position-on-quit=no --no-resume-playback` to
+  override the user's global mpv.conf (`keep-open=yes` would leave a
+  silent player alive after the stream ends), `--network-timeout=15`,
+  `--ytdl=no` (direct streams; never probes yt-dlp) and an explicit
+  `--input-ipc-server`. `check_dependencies` only requires mpv for
+  `--stations`, and saved-station symlinks resolve before the check, so
+  they work without yt-dlp installed. History entries carry
+  `kind: "station"`, and `now_playing_screen` hides "toggle video" for
+  them. `attach_detached`/`relaunch_detached` map the IPC path back to a
+  saved station so a detached stream reattaches as audio, not as a
   YouTube video.
+- **Stream resilience**: `_ipc_watch` follows the player's IPC events for
+  the whole station playback and records the `end-file` reason. A
+  `_station_supervise` thread polls every 2s and relaunches on `eof` /
+  `error` with a 2s-per-failure backoff (capped at 10s), giving up after
+  5 consecutive fast failures; a player that survives one poll resets
+  the counter, so flaky stations reconnect indefinitely. Reasons `quit`
+  and `stop` mean the user closed mpv and are honored: no relaunch.
+  `STATION_GEN` invalidates stale supervisors on any play/stop, and
+  reconnects are silent (no spinner or "playing" banner over the menu).
+- **Now playing**: `station_song_title` reads
+  `metadata/by-key/icy-title` (falling back to `media-title`) over IPC,
+  after checking the player's `path` is the station URL, and the action
+  menu header shows `♪ Artist - Title` when the stream publishes ICY
+  metadata.
 - **CLI/UI**: `--stations` / `-s` opens the TUI; `--stations <slug|url>`
   plays directly (accepts `--bg`), plus `--list`, `--help`, `--config`.
   Main menu is Search / Radio / Stations / News / History / Exit; go-to

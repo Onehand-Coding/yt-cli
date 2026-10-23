@@ -4,6 +4,7 @@
 Verifies the CLI listing plus the main-menu → Stations → back → exit path
 without touching the real ~/.config/yt-cli or launching mpv.
 """
+
 import json
 import os
 import shutil
@@ -28,18 +29,24 @@ def main() -> int:
     home = Path(tempfile.mkdtemp(prefix="ytcli-flow-f-"))
     cfgdir = home / ".config" / "yt-cli"
     cfgdir.mkdir(parents=True)
-    (cfgdir / "config.json").write_text(json.dumps({
-        "stations": [{
-            "slug": "jazz-fm",
-            "name": "Jazz FM",
-            "url": "http://example.invalid/jazz",
-            "countrycode": "US",
-            "codec": "MP3",
-            "bitrate": 128,
-            "tags": ["jazz"],
-            "enabled": True,
-        }],
-    }))
+    (cfgdir / "config.json").write_text(
+        json.dumps(
+            {
+                "stations": [
+                    {
+                        "slug": "jazz-fm",
+                        "name": "Jazz FM",
+                        "url": "http://example.invalid/jazz",
+                        "countrycode": "US",
+                        "codec": "MP3",
+                        "bitrate": 128,
+                        "tags": ["jazz"],
+                        "enabled": True,
+                    }
+                ],
+            }
+        )
+    )
     env = {"HOME": str(home)}
 
     ok = True
@@ -47,23 +54,24 @@ def main() -> int:
     listing = subprocess.run(
         [YT_CLI, "--stations", "--list"],
         env={**os.environ, **env},
-        capture_output=True, text=True, timeout=30,
+        capture_output=True,
+        text=True,
+        timeout=30,
     )
-    listed = listing.returncode == 0 and "jazz-fm" in listing.stdout \
-        and "Jazz FM" in listing.stdout
+    listed = listing.returncode == 0 and "jazz-fm" in listing.stdout and "Jazz FM" in listing.stdout
     print(f"  [{'PASS' if listed else 'FAIL'}] --stations --list")
     ok &= listed
 
     h = Harness([YT_CLI], env=env, name="flow_f")
     try:
         ok &= h.wait_for("search / radio / stations / news", 15)
-        h.send("3\r", 0.4)                       # main menu: Search Radio Stations
+        h.send("3\r", 0.4)  # main menu: Search Radio Stations
         ok &= h.wait_for("Stations", 8)
         ok &= h.wait_for("Jazz FM", 8)
         ok &= h.wait_for("manage stations", 5)
-        h.send("\x1b", 0.4)                      # Esc → main menu
+        h.send("\x1b", 0.4)  # Esc → main menu
         ok &= h.wait_new("main ❯", 8)
-        h.send("x\r", 0.4)                       # Exit
+        h.send("x\r", 0.4)  # Exit
         time.sleep(2)
         h.read(1)
         exited = h.done

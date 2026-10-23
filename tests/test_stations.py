@@ -2,6 +2,7 @@
 
 import json
 import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -42,19 +43,22 @@ def _raw(name, uuid="", url=None, clicks=0, votes=0, tags="", **extra):
 
 # ---------- normalization / merging ----------
 
+
 def test_normalize_prefers_resolved_url_and_cleans_fields():
-    station = yt_cli._normalize_station({
-        "name": " Rock &amp; Roll ",
-        "url": "http://unresolved.example/stream",
-        "url_resolved": "https://resolved.example/stream",
-        "stationuuid": "u1",
-        "countrycode": "ph",
-        "tags": " Rock, rock ,, Pop ",
-        "codec": "MP3",
-        "bitrate": "128",
-        "clickcount": "10",
-        "votes": "3",
-    })
+    station = yt_cli._normalize_station(
+        {
+            "name": " Rock &amp; Roll ",
+            "url": "http://unresolved.example/stream",
+            "url_resolved": "https://resolved.example/stream",
+            "stationuuid": "u1",
+            "countrycode": "ph",
+            "tags": " Rock, rock ,, Pop ",
+            "codec": "MP3",
+            "bitrate": "128",
+            "clickcount": "10",
+            "votes": "3",
+        }
+    )
     assert station is not None
     assert station["name"] == "Rock & Roll"
     assert station["url"] == "https://resolved.example/stream"
@@ -66,24 +70,25 @@ def test_normalize_prefers_resolved_url_and_cleans_fields():
     assert station["enabled"] is True
 
 
-@pytest.mark.parametrize("raw", [
-    None,
-    {},
-    {"name": "no url"},
-    {"name": "bad scheme", "url": "ftp://example/stream"},
-    {"name": "   ", "url": "http://example/stream"},
-    "not a dict",
-])
+@pytest.mark.parametrize(
+    "raw",
+    [
+        None,
+        {},
+        {"name": "no url"},
+        {"name": "bad scheme", "url": "ftp://example/stream"},
+        {"name": "   ", "url": "http://example/stream"},
+        "not a dict",
+    ],
+)
 def test_normalize_rejects_unusable_records(raw):
     assert yt_cli._normalize_station(raw) is None
 
 
 def test_merge_dedupes_by_uuid_then_ranks_by_clicks_and_votes():
     merged = yt_cli._merge_station_results(
-        [_raw("alpha", "u1", clicks=1),
-         _raw("bravo", "u2", clicks=50)],
-        [_raw("alpha duplicate", "u1", clicks=99),
-         _raw("charlie", "u3", clicks=50, votes=5)],
+        [_raw("alpha", "u1", clicks=1), _raw("bravo", "u2", clicks=50)],
+        [_raw("alpha duplicate", "u1", clicks=99), _raw("charlie", "u3", clicks=50, votes=5)],
     )
     assert [s["name"] for s in merged] == ["charlie", "bravo", "alpha"]
 
@@ -98,16 +103,24 @@ def test_merge_uses_name_and_url_when_uuid_missing():
 
 # ---------- search ----------
 
+
 def test_search_merges_name_and_tag_results(cfg_files, monkeypatch):
     calls = []
 
     def fake_get(path, params=None, timeout=8):
         calls.append(dict(params or {}))
         if "name" in (params or {}):
-            return [_raw("Jazz FM", "1", url="http://jazz.example",
-                         clicks=5, tags="jazz", countrycode="US")]
-        return [_raw("Jazz Radio", "2", url="http://jazz2.example",
-                     clicks=9, tags="jazz")]
+            return [
+                _raw(
+                    "Jazz FM",
+                    "1",
+                    url="http://jazz.example",
+                    clicks=5,
+                    tags="jazz",
+                    countrycode="US",
+                )
+            ]
+        return [_raw("Jazz Radio", "2", url="http://jazz2.example", clicks=9, tags="jazz")]
 
     monkeypatch.setattr(yt_cli, "_rb_get", fake_get)
     results = yt_cli.search_stations("jazz")
@@ -133,47 +146,193 @@ def test_search_skips_tag_fallback_when_name_results_are_plenty(cfg_files, monke
 
 def test_search_caches_repeat_queries(cfg_files, monkeypatch):
     calls = []
-    monkeypatch.setattr(yt_cli, "_rb_get",
-                        lambda *a, **k: calls.append(1) or [])
+    monkeypatch.setattr(yt_cli, "_rb_get", lambda *a, **k: calls.append(1) or [])
 
     yt_cli.search_stations("zzz")
     first = len(calls)
     yt_cli.search_stations("zzz")
 
-    assert first == len(calls) == 2      # name + tag query, cached afterwards
+    assert first == len(calls) == 2  # name + tag query, cached afterwards
 
 
 def test_empty_query_does_not_hit_network(cfg_files, monkeypatch):
-    monkeypatch.setattr(yt_cli, "_rb_get",
-                        lambda *a, **k: pytest.fail("network call"))
+    monkeypatch.setattr(yt_cli, "_rb_get", lambda *a, **k: pytest.fail("network call"))
     assert yt_cli.search_stations("   ") == []
 
 
 # ---------- playback command ----------
 
+
 def test_build_station_cmd_is_audio_only():
-    cmd = yt_cli.build_station_cmd({"name": "Jazz FM",
-                                    "url": "https://stream.example/jazz"})
+    cmd = yt_cli.build_station_cmd({"name": "Jazz FM", "url": "https://stream.example/jazz"})
     assert cmd[0] == "mpv"
     assert "--vid=no" in cmd
     assert "--video=no" in cmd
+    # EOF must end the process so the supervisor can reconnect; the user's
+    # mpv.conf sets keep-open=yes and would leave a silent player alive.
+    assert "--keep-open=no" in cmd
+    assert "--no-resume-playback" in cmd
+    assert "--save-position-on-quit=no" in cmd
+    assert "--network-timeout=15" in cmd
+    # Stations are direct streams; mpv's ytdl_hook must not probe yt-dlp.
+    assert "--ytdl=no" in cmd
+    assert f"--input-ipc-server={yt_cli.IPC_SOCKET}" in cmd
     assert cmd[-1] == "https://stream.example/jazz"
     assert not any("--ytdl-format" in part for part in cmd)
+
+
+class FakeProc:
+    """Popen stand-in: poll() replays the last code once the script runs out."""
+
+    def __init__(self, codes):
+        self.codes = list(codes)
+
+    def poll(self):
+        return self.codes.pop(0) if len(self.codes) > 1 else self.codes[0]
+
+
+def end_state(reason=None):
+    state = {"reason": reason, "ended": threading.Event()}
+    if reason is not None:
+        state["ended"].set()
+    return state
+
+
+def test_station_supervisor_reconnects_after_stream_end(monkeypatch):
+    launches = []
+    ended = end_state("eof")
+
+    def fake_launch(station, announce=True):
+        launches.append(announce)
+        proc = FakeProc([None])  # reconnected stream stays up
+        yt_cli.PLAYER_PROC[0] = proc
+        return proc, ended
+
+    monkeypatch.setattr(yt_cli, "_station_launch", fake_launch)
+    dead = FakeProc([0])  # mpv exited at EOF
+    yt_cli.PLAYER_PROC[0] = dead
+    yt_cli.STATION_GEN[0] = 7
+    sleeps = []
+
+    def sleep_fn(secs):
+        sleeps.append(secs)
+        if len(sleeps) >= 4:
+            yt_cli.STATION_GEN[0] += 1  # another play/stop cancels us
+
+    yt_cli._station_supervise({"url": "http://jazz.example"}, 7, dead, ended, sleep_fn=sleep_fn)
+
+    assert launches == [False]  # silent reconnect: no spinner over the menu
+    assert sleeps[0] == yt_cli.STATION_POLL_SECS
+    assert sleeps[1] == 2  # first backoff
+
+
+def test_station_supervisor_gives_up_on_dead_stream(monkeypatch):
+    launches = []
+    ended = end_state("error")
+
+    def fake_launch(station, announce=True):
+        launches.append(station["url"])
+        proc = FakeProc([1])
+        yt_cli.PLAYER_PROC[0] = proc
+        return proc, ended
+
+    monkeypatch.setattr(yt_cli, "_station_launch", fake_launch)
+    dead = FakeProc([1])
+    yt_cli.PLAYER_PROC[0] = dead
+    yt_cli.STATION_GEN[0] = 11
+
+    yt_cli._station_supervise(
+        {"url": "http://dead.example"}, 11, dead, ended, sleep_fn=lambda s: None
+    )
+
+    assert len(launches) == yt_cli.STATION_RETRY_LIMIT
+
+
+@pytest.mark.parametrize("reason", ["quit", "stop"])
+def test_station_supervisor_honors_external_stop(monkeypatch, reason):
+    launches = []
+    ended = end_state(reason)
+
+    def fake_launch(station, announce=True):
+        launches.append(station["url"])
+        return FakeProc([None]), ended
+
+    monkeypatch.setattr(yt_cli, "_station_launch", fake_launch)
+    dead = FakeProc([0])
+    yt_cli.PLAYER_PROC[0] = dead
+    yt_cli.STATION_GEN[0] = 21
+
+    yt_cli._station_supervise(
+        {"url": "http://jazz.example"}, 21, dead, ended, sleep_fn=lambda s: None
+    )
+
+    assert launches == []  # the user closed mpv: do not fight it
+
+
+def test_format_station_row_marks_long_playing_name():
+    name = "A Very Long Station Name That Exceeds Thirty Chars"
+    row = yt_cli.format_station_row({"name": name}, name)
+    assert yt_cli.C.PLAY in row
+    assert "…" in row
+
+
+def test_station_song_title_reads_icy_metadata(monkeypatch):
+    def fake_rpc(cmd, timeout=2):
+        prop = cmd[-1]
+        if prop == "path":
+            return "http://jazz.example"
+        if prop == "metadata/by-key/icy-title":
+            return "  Miles Davis - So What  "
+        return None
+
+    monkeypatch.setattr(yt_cli, "ipc_rpc", fake_rpc)
+    assert yt_cli.station_song_title({"url": "http://jazz.example"}) == "Miles Davis - So What"
+
+
+def test_station_song_title_skips_foreign_player(monkeypatch):
+    monkeypatch.setattr(yt_cli, "ipc_rpc", lambda cmd, timeout=2: "https://youtube.com/watch?v=x")
+
+    assert yt_cli.station_song_title({"url": "http://jazz.example"}) == ""
+
+
+def test_station_song_title_falls_back_to_media_title(monkeypatch):
+    def fake_rpc(cmd, timeout=2):
+        prop = cmd[-1]
+        if prop == "path":
+            return "http://jazz.example"
+        if prop == "media-title":
+            return "Station Name"
+        return None
+
+    monkeypatch.setattr(yt_cli, "ipc_rpc", fake_rpc)
+    assert yt_cli.station_song_title({"url": "http://jazz.example"}) == "Station Name"
+
+
+def test_stop_shared_cancels_station_supervisor(monkeypatch):
+    monkeypatch.setattr(yt_cli, "kill_player", lambda proc: None)
+    yt_cli.PLAYER_PROC[0] = None
+    yt_cli.ATTACHED[0] = False
+    before = yt_cli.STATION_GEN[0]
+
+    yt_cli.stop_shared()
+
+    assert yt_cli.STATION_GEN[0] == before + 1
 
 
 def test_station_play_records_history_and_reports_click(cfg_files, monkeypatch):
     cfg = yt_cli.load_config()
     launched, history, clicks = [], [], []
-    monkeypatch.setattr(yt_cli, "launch_player",
-                        lambda cmd: launched.append(cmd) or None)
+    monkeypatch.setattr(yt_cli, "launch_player", lambda cmd: launched.append(cmd) or None)
     monkeypatch.setattr(yt_cli, "_ipc_watch", lambda *a, **k: None)
-    monkeypatch.setattr(yt_cli, "add_to_history",
-                        lambda item, cap: history.append(item))
-    monkeypatch.setattr(yt_cli, "report_station_click",
-                        lambda uuid: clicks.append(uuid))
+    monkeypatch.setattr(yt_cli, "add_to_history", lambda item, cap: history.append(item))
+    monkeypatch.setattr(yt_cli, "report_station_click", lambda uuid: clicks.append(uuid))
 
-    station = {"name": "Jazz FM", "url": "http://jazz.example",
-               "stationuuid": "u9", "countrycode": "US"}
+    station = {
+        "name": "Jazz FM",
+        "url": "http://jazz.example",
+        "stationuuid": "u9",
+        "countrycode": "US",
+    }
     yt_cli._station_play(cfg, station)
 
     assert launched and launched[0][-1] == "http://jazz.example"
@@ -185,16 +344,19 @@ def test_station_play_records_history_and_reports_click(cfg_files, monkeypatch):
 
 # ---------- saved stations ----------
 
+
 def test_station_add_dedupes_by_url_and_updates_in_place(cfg_files):
     cfg = yt_cli.load_config()
-    assert yt_cli.station_add(cfg, {"name": "Radio One",
-                                    "url": "http://one.example"}) == "radio-one"
-    assert yt_cli.station_add(cfg, {"name": "Radio Two",
-                                    "url": "http://two.example"}) == "radio-two"
+    assert (
+        yt_cli.station_add(cfg, {"name": "Radio One", "url": "http://one.example"}) == "radio-one"
+    )
+    assert (
+        yt_cli.station_add(cfg, {"name": "Radio Two", "url": "http://two.example"}) == "radio-two"
+    )
 
-    again = yt_cli.station_add(cfg, {"name": "Radio One HD",
-                                     "url": "http://one.example",
-                                     "bitrate": 192})
+    again = yt_cli.station_add(
+        cfg, {"name": "Radio One HD", "url": "http://one.example", "bitrate": 192}
+    )
 
     assert again == "radio-one"
     stations = yt_cli.load_config()["stations"]
@@ -234,8 +396,7 @@ def test_station_slug_is_unique_and_never_empty():
 
 
 def test_resolve_station_matches_slug_then_substring():
-    stations = [{"slug": "jazz-fm", "name": "Jazz FM"},
-                {"slug": "lofi", "name": "Lo-Fi Beats"}]
+    stations = [{"slug": "jazz-fm", "name": "Jazz FM"}, {"slug": "lofi", "name": "Lo-Fi Beats"}]
     lofi = yt_cli.resolve_station("lofi", stations)
     jazz = yt_cli.resolve_station("jazz", stations)
     assert lofi is not None and lofi["slug"] == "lofi"
@@ -245,13 +406,18 @@ def test_resolve_station_matches_slug_then_substring():
 
 def test_resolve_music_target_prefers_youtube_preset(cfg_files):
     cfg = yt_cli.load_config()
-    cfg["radio"]["presets"] = [{"slug": "shared", "name": "Shared",
-                                "url": "http://preset.example",
-                                "category": "Test", "enabled": True}]
+    cfg["radio"]["presets"] = [
+        {
+            "slug": "shared",
+            "name": "Shared",
+            "url": "http://preset.example",
+            "category": "Test",
+            "enabled": True,
+        }
+    ]
     yt_cli.save_config(cfg)
     cfg = yt_cli.load_config()
-    yt_cli.station_add(cfg, {"name": "Shared Station",
-                             "url": "http://station.example"})
+    yt_cli.station_add(cfg, {"name": "Shared Station", "url": "http://station.example"})
 
     preset = yt_cli.resolve_music_target(cfg, "shared")
     station = yt_cli.resolve_music_target(cfg, "shared-station")
@@ -275,6 +441,7 @@ def test_load_config_coerces_stations_to_list(cfg_files):
     yt_cli.CONFIG_PATH.write_text(json.dumps({"stations": "oops"}))
     assert yt_cli.load_config()["stations"] == []
 
-    yt_cli.CONFIG_PATH.write_text(json.dumps(
-        {"stations": [{"name": "Alpha", "url": "http://alpha.example"}]}))
+    yt_cli.CONFIG_PATH.write_text(
+        json.dumps({"stations": [{"name": "Alpha", "url": "http://alpha.example"}]})
+    )
     assert len(yt_cli.load_config()["stations"]) == 1
