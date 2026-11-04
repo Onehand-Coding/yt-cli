@@ -230,3 +230,46 @@ def test_playing_tables_expose_save_label():
         labels = [label for label, _ in table]
         assert "save" in labels
         assert "keep (save)" not in labels
+
+
+def test_saving_a_preset_keeps_channels_saved_earlier(cfg_files, monkeypatch):
+    disk = {
+        "radio": {"presets": []},
+        "news": {
+            "sources": [
+                {
+                    "id": "news5",
+                    "name": "News5",
+                    "channel_id": "UCx",
+                    "channel_name": "TV5 News Philippines",
+                    "enabled": True,
+                }
+            ]
+        },
+        "stations": [],
+    }
+    yt_cli.save_config(disk)
+    stale = {"radio": {"presets": []}, "news": {"sources": []}, "stations": []}
+
+    class UI:
+        def __init__(self):
+            self.calls = 0
+
+        def action(self, header, actions):
+            self.calls += 1
+            return "yes" if self.calls == 1 else "no"
+
+        def info(self, lines, wait=True):
+            return None
+
+        def prompt(self, label):
+            return ""
+
+    monkeypatch.setattr(yt_cli.time, "sleep", lambda seconds: None)
+    yt_cli.prompt_save_search_result(
+        stale, {"title": "E2E Preset", "url": "https://example.invalid/v"}, UI()
+    )
+
+    saved = yt_cli.load_config()
+    assert any(source["id"] == "news5" for source in saved["news"]["sources"])
+    assert any(preset["slug"] == "e2e-preset" for preset in saved["radio"]["presets"])

@@ -40,6 +40,10 @@ def test_sort_stream_items_live_then_upcoming_then_past():
         ("Streamed 2h ago", 2),
         ("Streamed 3d ago", 72),
         ("Streamed 2mo ago", 1440),
+        ("Streamed 3 hours ago", 3),
+        ("35 minutes ago", 35 / 60),
+        ("Streamed 2 days ago", 48),
+        ("Streamed 1 year ago", 8760),
         ("", 9999),
     ],
 )
@@ -95,7 +99,9 @@ def test_search_live_prefers_live_and_skips_recent_when_live_exists(monkeypatch)
                                                 "title": {
                                                     "runs": [
                                                         {
-                                                            "text": "TV Patrol Livestream | November 4"
+                                                            "text": (
+                                                                "TV Patrol Livestream | November 4"
+                                                            )
                                                         }
                                                     ]
                                                 },
@@ -348,3 +354,52 @@ def test_add_channel_creates_source(monkeypatch, cfg_files):
     source = cfg["news"]["sources"][0]
     assert source["channel_id"] == "UCabc"
     assert source["channel_name"] == "105.9 True FM"
+
+
+def test_search_live_returns_recent_when_nothing_is_live(monkeypatch):
+    data = {
+        "contents": {
+            "twoColumnSearchResultsRenderer": {
+                "primaryContents": {
+                    "sectionListRenderer": {
+                        "contents": [
+                            {
+                                "itemSectionRenderer": {
+                                    "contents": [
+                                        {
+                                            "videoRenderer": {
+                                                "videoId": "recent00001",
+                                                "title": {
+                                                    "runs": [
+                                                        {
+                                                            "text": "TV Patrol Express | November 4"
+                                                        }
+                                                    ]
+                                                },
+                                                "publishedTimeText": {
+                                                    "simpleText": "3 hours ago"
+                                                },
+                                                "ownerText": {
+                                                    "runs": [{"text": "ABS-CBN News"}]
+                                                },
+                                            }
+                                        }
+                                    ]
+                                }
+                            }
+                        ]
+                    }
+                }
+            }
+        }
+    }
+    monkeypatch.setattr(yt_cli, "fetch_url", lambda url, timeout=15: "<html>")
+    monkeypatch.setattr(yt_cli, "extract_yt_initial_data", lambda html: data)
+    items = yt_cli.search_live("TV Patrol", include_recent=True)
+    assert [i["id"] for i in items] == ["recent00001"]
+    assert items[0]["status"] == "past"
+
+
+def test_channel_status_invalid_id_is_reported():
+    status = yt_cli.channel_status({"id": "x", "name": "X", "channel_id": "@handle"})
+    assert status["status"] == "invalid-id"

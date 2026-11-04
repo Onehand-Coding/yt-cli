@@ -193,6 +193,14 @@ def load_config():
     return merged
 
 
+def refresh_config(cfg):
+    """Reload config.json into cfg so a save cannot drop another mode's changes."""
+    fresh = load_config()
+    cfg.clear()
+    cfg.update(fresh)
+    return cfg
+
+
 def save_config(cfg):
     # Volatile playback toggles belong in state.json, not config.json.
     clean = dict(cfg)
@@ -2099,6 +2107,7 @@ def _find_bin_dir():
 
 
 def prompt_save_search_result(cfg, result, ui):
+    refresh_config(cfg)
     title = result["title"]
     action = ui.action(
         [f'Save "{title}" as a preset?', "─" * 48],
@@ -2170,6 +2179,7 @@ def prompt_save_channel(
 ):
     """Save a news source. Captures channel_id when resolvable (one yt-dlp
     call); falls back to keyword-only save when lookup fails."""
+    refresh_config(cfg)
     if not channel_id:
         sp = Spinner("Resolving channel...")
         sp.start()
@@ -2974,6 +2984,7 @@ def _station_search_pick(ui, query):
 
 
 def prompt_save_station(cfg, ui, station):
+    refresh_config(cfg)
     title = station.get("name") or station.get("url", "station")
     action = ui.action(
         [f'Save "{title}" as a station?', "─" * 48],
@@ -3558,6 +3569,7 @@ def parse_relative_time(time_text):
         return 9999
     time_text = time_text.lower()
     patterns = [
+        (r"(\d+)\s*year", 8760),
         (r"(\d+)\s*hour", 1),
         (r"(\d+)\s*day", 24),
         (r"(\d+)\s*week", 168),
@@ -3596,10 +3608,12 @@ _AGO_UNITS = {
 
 
 def parse_ago_text(text):
-    """Hours from compact YouTube text like "Streamed 2h ago" or "34 min ago".
-    Returns 9999 when nothing parses."""
+    """Hours from YouTube text like "Streamed 2h ago" or "3 hours ago"."""
     if not text:
         return 9999
+    long_form = parse_relative_time(text)
+    if long_form < 9999:
+        return long_form
     match = re.search(r"(\d+)\s*(mo|y|w|d|hr|h|min|sec|m|s)\b", text.lower())
     if not match:
         return 9999
@@ -3844,6 +3858,10 @@ def channel_status(entry, timeout=15):
         return result
     try:
         html_content = fetch_url(channel_streams_url(channel_id), timeout=timeout)
+    except ChannelError as exc:
+        result["status"] = "invalid-id"
+        result["error"] = str(exc)
+        return result
     except (OSError, ValueError) as exc:
         result["status"] = "unknown"
         result["error"] = str(exc)
