@@ -3181,6 +3181,158 @@ def parse_relative_time(time_text):
     return 9999
 
 
+# ---------- channel listings (lockupViewModel) ----------
+
+
+class ChannelError(Exception):
+    """The channel page could not be read. Never silently becomes a search."""
+
+
+_AGO_UNITS = {
+    "y": 8760,
+    "mo": 720,
+    "w": 168,
+    "d": 24,
+    "hr": 1,
+    "h": 1,
+    "min": 1 / 60,
+    "m": 1 / 60,
+    "sec": 1 / 3600,
+    "s": 1 / 3600,
+}
+
+
+def parse_ago_text(text):
+    """Hours from compact YouTube text like "Streamed 2h ago" or "34 min ago".
+    Returns 9999 when nothing parses."""
+    if not text:
+        return 9999
+    match = re.search(r"(\d+)\s*(mo|y|w|d|hr|h|min|sec|m|s)\b", text.lower())
+    if not match:
+        return 9999
+    return int(match.group(1)) * _AGO_UNITS[match.group(2)]
+
+
+def _parse_count(text):
+    """"1.2K" -> 1200, "8.6" -> 8, "" -> 0."""
+    match = re.match(r"([\d.,]+)\s*([KMB]?)", (text or "").strip(), re.I)
+    if not match:
+        return 0
+    number = float(match.group(1).replace(",", ""))
+    multiplier = {"": 1, "K": 1_000, "M": 1_000_000, "B": 1_000_000_000}
+    return int(number * multiplier[match.group(2).upper()])
+
+
+def classify_lockup_meta(rows):
+    """Turn a lockup's metadataRows into live / upcoming / past / unknown.
+
+    The page metadata is the evidence: "N watching" means live now,
+    "Scheduled for" means upcoming, "Streamed ... ago" means it already ended.
+    Cross-checked against yt-dlp's live_status on 2026-11-04.
+    """
+    row_texts = []
+    for row in rows or []:
+        parts = [p.get("text", {}).get("content", "") for p in row.get("metadataParts", [])]
+        text = " ".join(part for part in parts if part).strip()
+        if text:
+            row_texts.append(text)
+
+    joined = " ".join(row_texts)
+    meta = {
+        "status": "unknown",
+        "viewers": 0,
+        "viewers_text": "",
+        "schedule_text": "",
+        "streamed_text": "",
+        "hours_ago": 9999,
+    }
+
+    watching = re.search(r"([\d.,]+[KMB]?)\s+watching", joined, re.I)
+    if watching:
+        meta["status"] = "live"
+        meta["viewers_text"] = watching.group(0)
+        meta["viewers"] = _parse_count(watching.group(1))
+        return meta
+
+    scheduled = next((t for t in row_texts if "scheduled for" in t.lower()), "")
+    if scheduled or any("waiting" in t.lower() for t in row_texts):
+        meta["status"] = "upcoming"
+        meta["schedule_text"] = scheduled
+        return meta
+
+    streamed = next(
+        (t for t in row_texts if "streamed" in t.lower() or "premiered" in t.lower()), ""
+    )
+    if streamed:
+        meta["status"] = "past"
+        meta["streamed_text"] = streamed
+        meta["hours_ago"] = parse_ago_text(streamed)
+        return meta
+
+    return meta
+
+
+def parse_lockup_video(lockup):
+    """One lockupViewModel -> a stream item, or None when it has no video."""
+    video_id = lockup.get("contentId") or ""
+    metadata = (lockup.get("metadata") or {}).get("lockupMetadataViewModel") or {}
+    title = (metadata.get("title") or {}).get("content") or ""
+    if not video_id or not title:
+        return None
+    rows = ((metadata.get("metadata") or {}).get("contentMetadataViewModel") or {}).get(
+        "metadataRows"
+    ) or []
+    meta = classify_lockup_meta(rows)
+    return {
+        "id": video_id,
+        "title": html.unescape(title),
+        "url": f"https://www.youtube.com/watch?v={video_id}",
+        "source": "",
+        "is_live": meta["status"] == "live",
+        **meta,
+    }
+
+
+def parse_lockup_videos(data):
+    """Collect every lockupViewModel in a channel page blob."""
+    found = []
+
+    def walk(obj):
+        if isinstance(obj, dict):
+            lockup = obj.get("lockupViewModel")
+            if isinstance(lockup, dict):
+                found.append(lockup)
+                return
+            for value in obj.values():
+                walk(value)
+        elif isinstance(obj, list):
+            for value in obj:
+                walk(value)
+
+    walk(data)
+    items = []
+    for lockup in found:
+        item = parse_lockup_video(lockup)
+        if item:
+            items.append(item)
+    return items
+
+
+def sort_stream_items(items):
+    """Live (most viewers first), then upcoming, then past (newest first)."""
+    live = sorted(
+        [i for i in items if i.get("status") == "live"],
+        key=lambda i: (-i.get("viewers", 0), i.get("title", "")),
+    )
+    upcoming = [i for i in items if i.get("status") == "upcoming"]
+    past = sorted(
+        [i for i in items if i.get("status") == "past"],
+        key=lambda i: i.get("hours_ago", 9999),
+    )
+    rest = [i for i in items if i.get("status") not in ("live", "upcoming", "past")]
+    return live + upcoming + past + rest
+
+
 def parse_video_renderer(video, keywords, channel_name, recent_hours=24):
     try:
         video_id = video.get("videoId", "")
