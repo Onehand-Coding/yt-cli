@@ -16,7 +16,7 @@ def flow_c():
     h.send("1\r", 0.4)
     ok &= h.wait_new("action ❯", 15)
     ok &= h.wait_new("playing", 90)
-    h.send("p\r", 0.4)
+    h.send("c\r", 0.4)
     ok &= h.wait_new("player ❯", 8)
     h.send("\x1b", 0.4)
     ok &= h.wait_new("action ❯", 8)

@@ -138,9 +138,7 @@ def test_add_to_history_keeps_kind(cfg_files):
 def test_saved_rows_align_kind_tag_across_kinds_and_lengths():
     rows = [
         yt_cli.format_saved_row({"kind": "channel", "name": "News5", "enabled": True}),
-        yt_cli.format_saved_row(
-            {"kind": "preset", "name": "Avenged Sevenfold", "enabled": True}
-        ),
+        yt_cli.format_saved_row({"kind": "preset", "name": "Avenged Sevenfold", "enabled": True}),
         yt_cli.format_saved_row({"kind": "station", "name": "ニュース", "enabled": True}),
     ]
 
@@ -167,3 +165,59 @@ def test_parse_index_roundtrips_padded_number_gutter():
     for number, width in ((1, 1), (1, 2), (9, 2), (10, 2), (100, 3)):
         line = yt_cli._num_line(number, "Jazz", width)
         assert yt_cli._parse_index(line) == number - 1
+
+
+def test_stream_pausable_rules():
+    assert yt_cli.stream_pausable({"status": "live"}) is False
+    assert yt_cli.stream_pausable({"status": "past"}) is True
+    assert yt_cli.stream_pausable({"kind": "station"}) is False
+    assert yt_cli.stream_pausable({"title": "video"}) is True
+
+
+def test_with_pause_inserts_before_stop(monkeypatch):
+    monkeypatch.setattr(yt_cli, "player_paused", lambda: False)
+    actions = [("start", "a"), ("stop", "q")]
+    assert yt_cli.with_pause(actions) == [("start", "a"), ("pause", "u"), ("stop", "q")]
+
+
+def test_with_pause_uses_play_when_paused(monkeypatch):
+    monkeypatch.setattr(yt_cli, "player_paused", lambda: True)
+    assert ("play", "u") in yt_cli.with_pause([("stop", "q")])
+
+
+def test_with_pause_hides_without_a_player(monkeypatch):
+    monkeypatch.setattr(yt_cli, "player_paused", lambda: None)
+    assert yt_cli.with_pause([("stop", "q")]) == [("stop", "q")]
+
+
+def test_with_pause_respects_not_pausable(monkeypatch):
+    monkeypatch.setattr(yt_cli, "player_paused", lambda: False)
+    assert yt_cli.with_pause([("stop", "q")], pausable=False) == [("stop", "q")]
+
+
+def test_toggle_pause_cycles_mpv_pause(monkeypatch):
+    calls = []
+
+    def fake_ipc(cmd, timeout=2):
+        calls.append(cmd)
+        return False
+
+    monkeypatch.setattr(yt_cli, "ipc_rpc", fake_ipc)
+    assert yt_cli.toggle_pause() is True
+    assert calls == [["cycle", "pause"]]
+
+
+def test_playing_tables_expose_stop_detach_exit():
+    tables = [
+        yt_cli.PLAY_ACTIONS_SEARCH,
+        yt_cli.PLAY_ACTIONS_RADIO,
+        yt_cli.PLAY_ACTIONS_NEWS,
+        yt_cli.PLAY_ACTIONS_STATION,
+    ]
+    for table in tables:
+        labels = [label for label, _ in table]
+        assert "stop" in labels
+        assert "detach" in labels
+        assert "exit" in labels
+        assert "stop player" not in labels
+        assert "detach & exit" not in labels

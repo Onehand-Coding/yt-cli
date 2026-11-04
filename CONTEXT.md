@@ -312,6 +312,11 @@ Plan: `docs/plans/2026-11-04-unified-saved-channels.md`.
 - **Naming:** in the UI, internet radio is `Radio` (kind tag `[radio]`, manage -> Radio)
   and YouTube presets are `Presets`. The CLI flags keep their historical names:
   `--radio` opens presets, `--stations` opens internet radio.
+- **Playing actions:** `stop` (q), `detach` (d, keeps playing), and `exit` (x, stops)
+  are the three exits. `pause`/`play` appears only when the item can pause (VOD, replays,
+  search results, presets) and is implemented over IPC with `cycle pause`; live news and
+  internet radio do not show it. `change audio` is the news output-player action, renamed
+  so the label does not collide with `pause`.
 - **Gotcha:** `yt_cli.py` is now above 5000 lines, past pi-lens's LSP size limit. Use
   `pyright yt_cli.py` for type checks; pytest and ruff still work normally.
 - E2E flows updated for the Saved main menu. `flow_f.py` is network-free; flows a to e need
