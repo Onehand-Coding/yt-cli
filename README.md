@@ -32,7 +32,7 @@ yt-cli --news --verify --apply    # fill exact-name ids, disable confirmed 404s
 
 ## Layout
 
-```
+```text
 yt-cli              # executable wrapper (imports yt_cli; PATH symlink target)
 yt_cli.py           # the monolith — all app logic
 CONTEXT.md          # architecture, decisions, E2E gotchas
@@ -86,7 +86,7 @@ See `CONTEXT.md` for architecture and harness gotchas.
 
 The live entrypoint is a symlink:
 
-```
+```text
 ~/.local/bin/yt-cli → ~/Coding/projects/yt-cli/yt-cli
 ```
 

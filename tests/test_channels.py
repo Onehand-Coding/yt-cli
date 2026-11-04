@@ -124,7 +124,9 @@ def test_search_live_prefers_live_and_skips_recent_when_live_exists(monkeypatch)
                                         {
                                             "videoRenderer": {
                                                 "videoId": "pawpaw00001",
-                                                "title": {"runs": [{"text": "PAW Patrol Livestream"}]},
+                                                "title": {
+                                                    "runs": [{"text": "PAW Patrol Livestream"}]
+                                                },
                                                 "badges": [
                                                     {
                                                         "metadataBadgeRenderer": {
@@ -162,9 +164,7 @@ def test_stream_row_labels_live_upcoming_past():
 
 
 def test_stream_badge_never_claims_live_for_past():
-    assert "LIVE" in yt_cli.render_stream_badge(
-        {"status": "live", "viewers_text": "1.2K watching"}
-    )
+    assert "LIVE" in yt_cli.render_stream_badge({"status": "live", "viewers_text": "1.2K watching"})
     assert "LIVE" not in yt_cli.render_stream_badge(
         {"status": "past", "streamed_text": "34 min ago"}
     )
@@ -246,7 +246,7 @@ def test_verify_flags_duplicate_bindings(monkeypatch, cfg_files):
 
 def test_resolve_channel_id_from_handle(monkeypatch):
     html = (
-        '<html><head><title>TV5 News Philippines - YouTube</title>'
+        "<html><head><title>TV5 News Philippines - YouTube</title>"
         '<link rel="canonical" href="https://www.youtube.com/channel/UCGEbMwiX774cseKvJqF9R2g">'
         "</head></html>"
     )
@@ -293,10 +293,8 @@ def test_apply_channel_fixes_disables_dead(monkeypatch, cfg_files):
 
 
 def test_resolve_channel_id_from_channel_url(monkeypatch):
-    html = '<html><head><title>TV5 News Philippines - YouTube</title></head></html>'
+    html = "<html><head><title>TV5 News Philippines - YouTube</title></head></html>"
     monkeypatch.setattr(yt_cli, "fetch_url", lambda url, timeout=15: html)
-    resolved = yt_cli.resolve_channel_id(
-        "https://www.youtube.com/channel/UCGEbMwiX774cseKvJqF9R2g"
-    )
+    resolved = yt_cli.resolve_channel_id("https://www.youtube.com/channel/UCGEbMwiX774cseKvJqF9R2g")
     assert resolved is not None
     assert resolved["id"] == "UCGEbMwiX774cseKvJqF9R2g"
