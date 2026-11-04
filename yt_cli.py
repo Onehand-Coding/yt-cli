@@ -2154,7 +2154,7 @@ GO_TO_LABELS = {
 
 def go_to_picker(ui):
     entries = ["Saved", "Presets", "Radio", "News", "Search", "Home"]
-    idx = ui.pick(entries, "go to ❯ ", "Go to\n" + "─" * 44 + "\nEsc → stay here", "35%")
+    idx = ui.pick(entries, "go to ❯ ", "Go to\n" + "─" * 44 + "\nEsc → back", "35%")
     if idx is None:
         return None
     return {
