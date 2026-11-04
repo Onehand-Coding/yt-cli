@@ -1,5 +1,6 @@
 """Unit tests for the unified Saved catalog (no network)."""
 
+import json
 import sys
 from pathlib import Path
 
@@ -92,3 +93,47 @@ def test_pick_saved_search_row():
             return ("", 0)
 
     assert yt_cli.pick_saved([], UI()) == ("search", "")
+
+
+def test_save_options_channel_context_prefers_channel():
+    opts = yt_cli.save_options({"kind": "channel", "channel_id": "UCx"})
+    assert opts[0][1] == "channel"
+
+
+def test_save_options_search_context_offers_preset_first():
+    opts = yt_cli.save_options({"kind": "video", "channel_id": "UCx"})
+    assert opts[0][1] == "preset"
+
+
+def test_action_tables_have_unique_codes():
+    tables = [
+        yt_cli.PLAY_ACTIONS_SEARCH,
+        yt_cli.PLAY_ACTIONS_RADIO,
+        yt_cli.PLAY_ACTIONS_NEWS,
+        yt_cli.PLAY_ACTIONS_STATION,
+    ]
+    for table in tables:
+        codes = [code for _, code in table]
+        assert len(codes) == len(set(codes)), [label for label, _ in table]
+
+
+def test_news_add_source_stores_channel_name(cfg_files):
+    cfg = {"news": {"sources": []}, "radio": {"presets": []}, "stations": []}
+    yt_cli.news_add_source(
+        cfg,
+        "News5",
+        ["news5"],
+        channel_id="UCx",
+        channel_name="TV5 News Philippines",
+    )
+    assert cfg["news"]["sources"][0]["channel_name"] == "TV5 News Philippines"
+
+
+def test_add_to_history_keeps_kind(cfg_files):
+    yt_cli.add_to_history(
+        {"title": "Ted Failon", "url": "u", "kind": "channel", "channel_id": "UCx"},
+        10,
+    )
+    entry = json.loads(yt_cli.HISTORY_PATH.read_text())[0]
+    assert entry["kind"] == "channel"
+    assert entry["channel_id"] == "UCx"

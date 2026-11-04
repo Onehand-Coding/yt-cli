@@ -726,7 +726,8 @@ def format_fzf_item(idx, item):
     when = ""
     if item.get("played_at"):
         when = f" · {item['played_at'][:16].replace('T', ' ')}"
-    return f"{title}  {c(C.DIM, f'[{dur}] {uploader}{when}')}"
+    kind_tag = " [channel]" if item.get("kind") == "channel" else ""
+    return f"{title}  {c(C.DIM, f'[{dur}] {uploader}{when}{kind_tag}')}"
 
 
 # ---------- player lifecycle ----------
@@ -2080,7 +2081,9 @@ def go_to_picker(ui):
     }[entries[idx]]
 
 
-def prompt_save_channel(cfg, ui, name, url, channel_id=None, keywords=None, fallback_url=None):
+def prompt_save_channel(
+    cfg, ui, name, url, channel_id=None, keywords=None, fallback_url=None, channel_name=None
+):
     """Save a news source. Captures channel_id when resolvable (one yt-dlp
     call); falls back to keyword-only save when lookup fails."""
     if not channel_id:
@@ -2110,33 +2113,54 @@ def prompt_save_channel(cfg, ui, name, url, channel_id=None, keywords=None, fall
             return None
     ui.info([f'Save "{name}"', "", "Display name (Enter to use suggested):"], wait=False)
     final_name = ui.prompt("name") or name
-    ui.info(["Keywords, comma-separated (Enter to use name):"], wait=False)
-    kw_raw = ui.prompt("keywords")
-    kws = (
-        [k.strip().lower() for k in kw_raw.split(",")]
-        if kw_raw
-        else (keywords or [final_name.lower()])
+    if channel_id:
+        # The channel is the source now; keywords are legacy and unused.
+        kws = keywords or [final_name.lower()]
+        channel_name = channel_name or name
+    else:
+        ui.info(["Keywords, comma-separated (Enter to use name):"], wait=False)
+        kw_raw = ui.prompt("keywords")
+        kws = (
+            [k.strip().lower() for k in kw_raw.split(",")]
+            if kw_raw
+            else (keywords or [final_name.lower()])
+        )
+        channel_name = ""
+    slug = news_add_source(
+        cfg,
+        final_name,
+        kws,
+        channel_id=channel_id,
+        fallback_url=fallback_url,
+        channel_name=channel_name,
     )
-    slug = news_add_source(cfg, final_name, kws, channel_id=channel_id, fallback_url=fallback_url)
     kind = "full-channel" if channel_id else "keyword-only"
     ui.info([f"✓  Saved as [{kind} source.{slug}]"], wait=False)
     time.sleep(0.8)
     return slug
 
 
+def save_options(item):
+    """What can be kept from here. First letter of each label is unique."""
+    kind = item.get("kind") or "video"
+    if kind == "channel":
+        return [
+            ("channel: save this channel", "channel"),
+            ("video: save a fixed-link preset", "preset"),
+        ]
+    if kind == "station":
+        return [("station: save this station", "station")]
+    return [("preset: save as preset", "preset"), ("channel: save its channel", "channel")]
+
+
 def save_current(cfg, ui, item, default_kind="preset"):
     """Save the currently playing item without stopping playback."""
     title = item.get("title") or item.get("url", "")
     url = item.get("url", "")
-    preset_choice = ("save as music/video preset", "preset")
-    news_choice = ("save as news channel", "news")
-    choices = (
-        [news_choice, preset_choice] if default_kind == "news" else [preset_choice, news_choice]
-    )
-    action = ui.action([f'Save "{title}"', "─" * 48], choices)
+    action = ui.action([f'Save "{title}"', "─" * 48], save_options(item))
     if action == "preset":
         return prompt_save_search_result(cfg, {"title": title, "url": url}, ui)
-    if action == "news":
+    if action == "channel":
         return prompt_save_channel(
             cfg,
             ui,
@@ -2145,7 +2169,10 @@ def save_current(cfg, ui, item, default_kind="preset"):
             channel_id=item.get("channel_id"),
             keywords=item.get("keywords"),
             fallback_url=item.get("fallback_url"),
+            channel_name=item.get("channel_name"),
         )
+    if action == "station":
+        return prompt_save_station(cfg, ui, item)
     return None
 
 
@@ -2165,8 +2192,8 @@ def url_entry_flow(cfg, ui, url):
         [f"URL:  {c(C.BOLD, title)}", f"   {c(C.DIM, url[:70])}", "─" * 48],
         [
             ("play now", "play"),
-            ("save as preset", "preset"),
-            ("save as news channel", "channel"),
+            ("preset: save as preset", "preset"),
+            ("channel: save as channel", "channel"),
             ("cancel", "cancel"),
         ],
     )
@@ -3106,7 +3133,7 @@ def load_news_cfg(cfg):
     return settings, sources
 
 
-def news_add_source(cfg, name, keywords, channel_id=None, fallback_url=None):
+def news_add_source(cfg, name, keywords, channel_id=None, fallback_url=None, channel_name=""):
     slug = _slugify(name)
     existing = [s["id"] for s in cfg["news"]["sources"]]
     base = slug
@@ -3119,6 +3146,7 @@ def news_add_source(cfg, name, keywords, channel_id=None, fallback_url=None):
             "id": slug,
             "name": name,
             "channel_id": channel_id or "",
+            "channel_name": channel_name or "",
             "keywords": keywords or [name.lower()],
             "fallback_url": fallback_url
             or f"https://www.youtube.com/results?search_query={urllib.parse.quote(name)}",
