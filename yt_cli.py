@@ -3265,8 +3265,6 @@ def get_all_sources_from_config(cfg):
 # ---------- SAVED CATALOG ----------
 
 
-SAVED_KINDS = ("channel", "station", "preset")
-SAVED_MODE = {"preset": "radio", "station": "stations", "channel": "news"}
 KIND_MARK = {"channel": "●", "station": "♪", "preset": "▷"}
 KIND_LABEL = {"channel": "channel", "station": "radio", "preset": "preset"}
 KIND_ORDER = {"channel": 0, "station": 1, "preset": 2}
@@ -3748,6 +3746,48 @@ def page_title(html_content):
     return title
 
 
+def search_channel_by_name(name, timeout=15):
+    """Find a channel whose title exactly matches the name (case-insensitive)."""
+    query = (name or "").strip()
+    if not query:
+        return None
+    url = (
+        "https://www.youtube.com/results?search_query="
+        + urllib.parse.quote(query)
+        + "&sp=EgIQAg%253D%253D"
+    )
+    html_content = fetch_url(url, timeout=timeout)
+    if not html_content or html_content.startswith(("Error", "HTTP")):
+        return None
+    data = extract_yt_initial_data(html_content)
+    if not data:
+        return None
+
+    found = []
+
+    def walk(obj):
+        if isinstance(obj, dict):
+            renderer = obj.get("channelRenderer")
+            if isinstance(renderer, dict):
+                found.append(renderer)
+                return
+            for value in obj.values():
+                walk(value)
+        elif isinstance(obj, list):
+            for value in obj:
+                walk(value)
+
+    walk(data)
+    needle = query.lower()
+    for renderer in found:
+        title = (renderer.get("title") or {}).get("simpleText") or ""
+        if title.strip().lower() == needle:
+            channel_id = renderer.get("channelId") or ""
+            if channel_id:
+                return {"id": channel_id, "title": title}
+    return None
+
+
 def resolve_channel_id(ref, timeout=15):
     """Resolve UC..., @handle, a handle, or a channel URL to {id, title}."""
     ref = (ref or "").strip()
@@ -3764,7 +3804,10 @@ def resolve_channel_id(ref, timeout=15):
         url = channel_streams_url(ref)
         by_id = ref
     else:
-        url = "https://www.youtube.com/@" + ref
+        by_name = search_channel_by_name(ref, timeout)
+        if by_name:
+            return by_name
+        url = "https://www.youtube.com/@" + ref.replace(" ", "")
         by_id = None
 
     html_content = fetch_url(url, timeout=timeout)
@@ -3864,6 +3907,22 @@ def apply_channel_fixes(cfg, report):
     if bound or disabled:
         save_config(cfg)
     return {"bound": bound, "disabled": disabled, "skipped": skipped}
+
+
+def add_channel(cfg, name, ref=None):
+    """Resolve a channel and add it as a new news source."""
+    resolved = resolve_channel_id(ref or name)
+    if not resolved:
+        return None
+    slug = news_add_source(
+        cfg,
+        name,
+        [name.lower()],
+        channel_id=resolved["id"],
+        fallback_url=f"https://www.youtube.com/channel/{resolved['id']}/streams",
+        channel_name=resolved["title"],
+    )
+    return {"id": slug, "channel_id": resolved["id"], "channel_title": resolved["title"]}
 
 
 def bind_channel(cfg, source_id, ref):
@@ -4752,6 +4811,7 @@ USAGE:
     yt-cli --news <source> [player] [--replay]  Play the channel's live
     yt-cli --news --list
     yt-cli --news --verify [--apply] [--json]
+    yt-cli --news --add <name> [@handle|UC...|url]
     yt-cli --news --bind <source-id> <@handle|UC...|url>
     yt-cli --news --config
     yt-cli --news --help
@@ -4986,6 +5046,19 @@ def _news_cli_main():
                 f"\n✅ bound {counts['bound']} · disabled {counts['disabled']}"
                 f" · skipped {counts['skipped']}"
             )
+        sys.exit(0)
+
+    if args[0] == "--add":
+        if len(args) < 2:
+            print("❌ usage: yt-cli --news --add <name> [@handle|UC...|url]")
+            sys.exit(1)
+        name = args[1]
+        ref = args[2] if len(args) > 2 else name
+        added = add_channel(cfg, name, ref)
+        if not added:
+            print("❌ could not resolve that channel")
+            sys.exit(1)
+        print(f"✓ added [{added['id']}] -> {added['channel_title']} ({added['channel_id']})")
         sys.exit(0)
 
     if args[0] == "--bind":

@@ -298,3 +298,53 @@ def test_resolve_channel_id_from_channel_url(monkeypatch):
     resolved = yt_cli.resolve_channel_id("https://www.youtube.com/channel/UCGEbMwiX774cseKvJqF9R2g")
     assert resolved is not None
     assert resolved["id"] == "UCGEbMwiX774cseKvJqF9R2g"
+
+
+def test_resolve_channel_id_by_exact_name(monkeypatch):
+    data = {
+        "contents": [
+            {
+                "channelRenderer": {
+                    "channelId": "UCname",
+                    "title": {"simpleText": "105.9 True FM"},
+                }
+            }
+        ]
+    }
+    monkeypatch.setattr(yt_cli, "fetch_url", lambda url, timeout=15: "<html>")
+    monkeypatch.setattr(yt_cli, "extract_yt_initial_data", lambda html: data)
+    resolved = yt_cli.resolve_channel_id("105.9 True FM")
+    assert resolved is not None
+    assert resolved["id"] == "UCname"
+    assert resolved["title"] == "105.9 True FM"
+
+
+def test_channel_name_search_requires_exact_title(monkeypatch):
+    data = {
+        "contents": [
+            {
+                "channelRenderer": {
+                    "channelId": "UCother",
+                    "title": {"simpleText": "DZRH News Television"},
+                }
+            }
+        ]
+    }
+    monkeypatch.setattr(yt_cli, "fetch_url", lambda url, timeout=15: "<html>")
+    monkeypatch.setattr(yt_cli, "extract_yt_initial_data", lambda html: data)
+    assert yt_cli.search_channel_by_name("DZRH") is None
+
+
+def test_add_channel_creates_source(monkeypatch, cfg_files):
+    cfg = {"news": {"sources": []}, "radio": {"presets": []}, "stations": []}
+    monkeypatch.setattr(
+        yt_cli,
+        "resolve_channel_id",
+        lambda ref, timeout=15: {"id": "UCabc", "title": "105.9 True FM"},
+    )
+    added = yt_cli.add_channel(cfg, "105.9 True FM")
+    assert added is not None
+    assert added["id"] == "1059-true-fm"
+    source = cfg["news"]["sources"][0]
+    assert source["channel_id"] == "UCabc"
+    assert source["channel_name"] == "105.9 True FM"

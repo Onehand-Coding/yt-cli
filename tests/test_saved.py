@@ -51,10 +51,6 @@ def test_format_saved_row_marks_disabled_and_kind():
     assert "[radio]" in radio and "[station]" not in radio
 
 
-def test_saved_mode_mapping():
-    assert yt_cli.SAVED_MODE == {"preset": "radio", "station": "stations", "channel": "news"}
-
-
 def test_pick_saved_maps_selected_row_to_item():
     class UI:
         def pick_query(self, items, prompt, header, height):

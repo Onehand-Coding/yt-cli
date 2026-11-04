@@ -826,7 +826,7 @@ yt-cli --news --bind kapatid-live-stream UCiFx0kZFjR29u0uJxTSq5MQ
 True FM is optional and added only if the user asks:
 
 ```bash
-yt-cli --news --bind "105.9 True FM" UCjUrQJqEIfO1e52faNzt04g
+yt-cli --news --add "105.9 True FM" UCjUrQJqEIfO1e52faNzt04g
 ```
 
 - [ ] **Step 2: Verify honest behavior**
