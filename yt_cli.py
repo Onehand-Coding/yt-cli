@@ -442,7 +442,10 @@ def _num_line(i, text, width=1):
 def _parse_index(chosen):
     if chosen is None:
         return None
-    m = re.match(r"^\x1b\[[^m]*m(\d+)\.", chosen) or re.match(r"^(\d+)\.", chosen)
+    # The number gutter may be right-aligned inside the dim escape.
+    m = re.match(r"^\x1b\[[^m]*m\s*(\d+)\.", chosen) or re.match(
+        r"^\s*(\d+)\.", chosen
+    )
     return int(m.group(1)) - 1 if m else None
 
 
@@ -1319,9 +1322,9 @@ def _run_mode(cfg, ui, choice, stop, play_mpv, goodbye, on_esc="quit"):
         run_search_mode(cfg, ui, stop, play_mpv, return_home=True)
     elif choice == "Saved":
         run_saved_mode(cfg, ui, None, stop, goodbye, on_esc=on_esc)
-    elif choice == "Radio":
+    elif choice == "Presets":
         run_saved_mode(cfg, ui, "preset", stop, goodbye, on_esc=on_esc)
-    elif choice == "Stations":
+    elif choice == "Radio":
         run_saved_mode(cfg, ui, "station", stop, goodbye, on_esc=on_esc)
     elif choice == "News":
         run_saved_mode(cfg, ui, "channel", stop, goodbye, on_esc=on_esc)
@@ -1355,7 +1358,7 @@ def run_fzf(cfg, mode=None):
     signal.signal(signal.SIGTERM, _clean_exit)
 
     if mode in ("radio", "stations", "news"):
-        dest = {"radio": "Radio", "stations": "Stations", "news": "News"}[mode]
+        dest = {"radio": "Presets", "stations": "Radio", "news": "News"}[mode]
         _run_mode_loop(cfg, ui, dest, stop_shared, play_mpv, goodbye)
         return
 
@@ -2091,22 +2094,22 @@ class GoTo(Exception):
 
 GO_TO_LABELS = {
     "saved": "Saved",
+    "presets": "Presets",
     "radio": "Radio",
-    "stations": "Stations",
     "news": "News",
     "search": "Search",
 }
 
 
 def go_to_picker(ui):
-    entries = ["Saved", "Radio", "Stations", "News", "Search", "Home"]
+    entries = ["Saved", "Presets", "Radio", "News", "Search", "Home"]
     idx = ui.pick(entries, "go to ❯ ", "Go to\n" + "─" * 44 + "\nEsc → stay here", "35%")
     if idx is None:
         return None
     return {
         "Saved": "saved",
+        "Presets": "presets",
         "Radio": "radio",
-        "Stations": "stations",
         "News": "news",
         "Search": "search",
         "Home": "home",
@@ -2848,20 +2851,20 @@ def pick_station(stations, now_playing_name, ui):
     for station in stations:
         lines.append(format_station_row(station, now_playing_name))
         index_map.append(("station", station))
-    lines.append("  ⚙   manage stations")
+    lines.append("  ⚙   manage radio")
     index_map.append(("manage", None))
     header = (
-        "yt-cli · Stations"
+        "yt-cli · radio"
         + "\n"
         + "─" * 48
         + "\n"
         + "Esc → back   ·   type to filter or search radio-browser.info"
     )
-    query, idx = ui.pick_query(lines, "station ❯ ", header, "70%")
+    query, idx = ui.pick_query(lines, "radio ❯ ", header, "70%")
     if idx is not None and 0 <= idx < len(index_map):
         kind, value = index_map[idx]
         if kind == "search":
-            q = ui.query(["Stations · search radio-browser.info", "─" * 48, "Esc → back"])
+            q = ui.query(["Radio · search radio-browser.info", "─" * 48, "Esc → back"])
             if not q or not q.strip():
                 return None
             q = q.strip()
@@ -2870,7 +2873,7 @@ def pick_station(stations, now_playing_name, ui):
     q = query.strip()
     if not q:
         return None
-    if q.lower() in ("manage stations", "manage", "m"):
+    if q.lower() in ("manage radio", "manage stations", "manage", "m"):
         return ("manage", None)
     return ("url", q) if looks_like_url(q) else ("search", q)
 
@@ -2883,7 +2886,7 @@ def pick_station_results(results, query, ui):
         return "retry" if action == "r" else None
     lines = [format_station_row(station) for station in results]
     header = (
-        f"Stations · {c(C.BOLD, query)} ({len(results)})" + "\n" + "─" * 48 + "\n" + "Esc → back"
+        f"Radio · {c(C.BOLD, query)} ({len(results)})" + "\n" + "─" * 48 + "\n" + "Esc → back"
     )
     idx = ui.pick(lines, "result ❯ ", header, "70%")
     if idx is None:
@@ -2969,7 +2972,7 @@ def manage_stations_screen(cfg, ui):
                 f"{c(C.DIM, '[' + station.get('slug', '') + ']')}"
             )
             index_map.append(station)
-        idx = ui.pick(lines, "station ❯ ", "Manage stations\n" + "─" * 44 + "\nEsc → back", "70%")
+        idx = ui.pick(lines, "radio ❯ ", "Manage radio\n" + "─" * 44 + "\nEsc → back", "70%")
         if idx is None:
             break
         target = index_map[idx]
@@ -3060,7 +3063,7 @@ def station_playing_loop(cfg, ui, station, stop_fn, play_fn, goodbye_fn):
         if action == "o":
             return False
         if action == "s":
-            q = ui.query(["Stations · search radio-browser.info", "─" * 48, "Esc → back"])
+            q = ui.query(["Radio · search radio-browser.info", "─" * 48, "Esc → back"])
             if q and q.strip():
                 q = q.strip()
                 if looks_like_url(q):
@@ -3211,6 +3214,7 @@ def get_all_sources_from_config(cfg):
 SAVED_KINDS = ("channel", "station", "preset")
 SAVED_MODE = {"preset": "radio", "station": "stations", "channel": "news"}
 KIND_MARK = {"channel": "●", "station": "♪", "preset": "▷"}
+KIND_LABEL = {"channel": "channel", "station": "radio", "preset": "preset"}
 KIND_ORDER = {"channel": 0, "station": 1, "preset": 2}
 
 
@@ -3280,7 +3284,7 @@ def format_saved_row(item, now_playing=None):
         mark = "▶"
     name = truncate_display(item["name"], 32)
     name_cell = name + " " * max(0, 32 - display_width(name))
-    tag = f"[{item['kind']}]"
+    tag = f"[{KIND_LABEL.get(item['kind'], item['kind'])}]"
     return f"{mark}  {name_cell}  {c(C.DIM, tag)}"
 
 
@@ -3312,14 +3316,14 @@ def pick_saved(items, ui, kind=None):
 
 
 def manage_saved_screen(cfg, ui):
-    entries = ["Presets", "Stations", "Channels", "Back"]
+    entries = ["Presets", "Radio", "Channels", "Back"]
     idx = ui.pick(entries, "manage ❯ ", "Manage saved\n" + "─" * 44, "35%")
     if idx is None:
         return
     choice = entries[idx]
     if choice == "Presets":
         manage_presets_screen(cfg, ui)
-    elif choice == "Stations":
+    elif choice == "Radio":
         manage_stations_screen(cfg, ui)
     elif choice == "Channels":
         manage_sources_screen(cfg, ui)
@@ -4997,13 +5001,13 @@ def _news_cli_main():
 
 def print_stations_help(stations):
     print(f"""
-📻 STATIONS · Internet radio (radio-browser.info)
+📻 RADIO · Internet radio (radio-browser.info)
 
 CONFIG: {CONFIG_PATH}
 
 USAGE:
-    yt-cli --stations / -s              Stations TUI
-    yt-cli --stations <slug|url>        Play a saved station or stream URL
+    yt-cli --stations / -s              Radio TUI (legacy flag name)
+    yt-cli --stations <slug|url>        Play a saved radio station or stream URL
     yt-cli --stations --list
     yt-cli --stations --config
     yt-cli --stations --help
@@ -5012,7 +5016,7 @@ OPTIONS:
     --bg, --background     Run in background
     --fg, --foreground     Run in foreground
 
-SAVED STATIONS:""")
+SAVED RADIO:""")
     if not stations:
         print("    (none yet: search in the TUI and press k to keep)")
     for station in stations:
@@ -5035,9 +5039,9 @@ def run_stations_cli():
         sys.exit(0)
 
     if args[0] in ("--list", "-l", "list"):
-        print(f"\n{c(C.BOLD + C.CYAN, '📻  stations')}  ·  saved\n")
+        print(f"\n{c(C.BOLD + C.CYAN, '📻  radio')}  ·  saved\n")
         if not stations:
-            print(f"  {c(C.DIM, 'no saved stations yet')}")
+            print(f"  {c(C.DIM, 'no saved radio yet')}")
         for station in stations:
             status = "●" if station.get("enabled", True) else "○"
             bitrate = f"{station['bitrate']}k" if station.get("bitrate") else "-"
@@ -5087,7 +5091,7 @@ def _curses_main(stdscr, cfg, mode):
         _curses_ui_message(stdscr, ["Goodbye! 👋"])
 
     if mode in ("radio", "stations", "news"):
-        dest = {"radio": "Radio", "stations": "Stations", "news": "News"}[mode]
+        dest = {"radio": "Presets", "stations": "Radio", "news": "News"}[mode]
         _run_mode_loop(cfg, ui, dest, stop_shared, play_mpv, goodbye)
         return
 

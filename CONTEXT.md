@@ -309,6 +309,9 @@ Plan: `docs/plans/2026-11-04-unified-saved-channels.md`.
   serves. Simulcast channels (ABS-CBN Entertainment, GMA Network, TV5 Philippines) emit one
   stream per day and one row; per-show channels (News5, True FM, ABS-CBN News) emit one row
   per show.
+- **Naming:** in the UI, internet radio is `Radio` (kind tag `[radio]`, manage -> Radio)
+  and YouTube presets are `Presets`. The CLI flags keep their historical names:
+  `--radio` opens presets, `--stations` opens internet radio.
 - **Gotcha:** `yt_cli.py` is now above 5000 lines, past pi-lens's LSP size limit. Use
   `pyright yt_cli.py` for type checks; pytest and ruff still work normally.
 - E2E flows updated for the Saved main menu. `flow_f.py` is network-free; flows a to e need

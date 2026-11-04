@@ -47,6 +47,8 @@ def test_format_saved_row_marks_disabled_and_kind():
     assert "[channel]" in row
     live = yt_cli.format_saved_row({"kind": "channel", "name": "News5", "enabled": True}, None)
     assert "●" in live and "○" not in live
+    radio = yt_cli.format_saved_row({"kind": "station", "name": "Star FM", "enabled": True}, None)
+    assert "[radio]" in radio and "[station]" not in radio
 
 
 def test_saved_mode_mapping():
@@ -159,3 +161,9 @@ def test_number_gutter_does_not_shift_double_digit_rows():
     one = yt_cli._num_line(1, row, 2)
     ten = yt_cli._num_line(10, row, 2)
     assert tag_column(one) == tag_column(ten)
+
+
+def test_parse_index_roundtrips_padded_number_gutter():
+    for number, width in ((1, 1), (1, 2), (9, 2), (10, 2), (100, 3)):
+        line = yt_cli._num_line(number, "Jazz", width)
+        assert yt_cli._parse_index(line) == number - 1

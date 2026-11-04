@@ -13,6 +13,9 @@ Formerly three scripts (`yt-cli`, `tune`, `news-stream`), merged into one. The h
 | `yt-cli --news` | Saved filtered to channels (live shows) |
 | `~/.local/bin/music/<preset>` | Radio preset (relative symlink → `../yt-cli`) |
 
+In the UI, internet radio is named **Radio** and YouTube presets are named **Presets**.
+The `--radio` and `--stations` flags keep their historical names.
+
 ## Channels
 
 A news source is a YouTube **channel**, never a saved stream link. Picking a channel fetches its
