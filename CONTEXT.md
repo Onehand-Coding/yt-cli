@@ -268,3 +268,48 @@ Spec: `docs/specs/2026-10-23-stations-mode-design.md`.
   the new header and asserts `YouTube` (not `search YouTube`) because
   curses diff-renders only the tail of a line whose prefix matches the
   previous frame.
+
+## Unified Saved catalog + channel-first news (2026-11-04)
+
+Spec: `docs/specs/2026-11-04-unified-saved-channels-design.md`.
+Plan: `docs/plans/2026-11-04-unified-saved-channels.md`.
+
+- **Main menu is Saved / Search / History** (+ `▶ Now Playing`). Radio, Stations, and News
+  are filters over Saved, not separate home entries. `--radio`, `--stations`, and `--news`
+  open Saved filtered by kind and keep their old pickers; `run_saved_mode` dispatches a
+  selected item by calling the mode with `initial_slug` (preset/station) or `initial_source`
+  (channel). `saved_items(cfg)` is a read adapter over `radio.presets`, `stations`, and
+  `news.sources`; there is no on-disk schema change and `raw` keeps the original record so
+  `build_mpv_cmd`/`_station_play` still see `radio`, `stationuuid`, `tags`, and friends.
+- **A news source is a channel, not a keyword search.** `channel_lives(channel_id)` fetches
+  `/channel/<id>/streams` and parses `lockupViewModel`. Channel pages no longer emit
+  `videoRenderer`; the old `find_streams()` returned 0 items and nobody noticed, so every
+  channel source silently fell through to a YouTube-wide search. Live evidence comes from the
+  page metadata: `N watching` = live, `waiting`/`Scheduled for` = upcoming, `Streamed N ago` =
+  past. Cross-checked against `yt-dlp --print live_status`. Sort is live (viewers desc),
+  upcoming, past (newest first).
+- **The PAW Patrol drift fix.** Global search (`search_live`) uses whole-phrase matching
+  (`phrase_in_title`), so "tv patrol" does not match "PAW Patrol Livestream". Channel paths
+  never merge a YouTube-wide search, and never fall back to one; a page that cannot be read
+  raises `ChannelError` and the UI says so.
+- **Save semantics.** `save_options(item)` derives the menu from context: a channel live
+  saves the channel, a video offers preset first, a station saves the station. Channel saves
+  no longer prompt for keywords; `channel_name` stores the resolved YouTube title.
+- **Verify is report-only by default.** `--news --verify [--apply] [--json]` checks each
+  binding via its `/streams` page. `label-mismatch` is never auto-renamed or rebound; `dead`
+  requires a confirmed 404 and is disabled, not deleted; timeouts are `unknown`.
+  `--news --bind <source-id> <@handle|UC...|url>` rebinds deliberately.
+- **CLI honesty.** `--news <channel>` plays the top live only. If nothing is live it prints
+  live/upcoming/replays and exits 0; `--replay` opts into the newest replay. No silent VOD.
+- **Day-one bindings (2026-11-04):** kapamilya-online-live -> ABS-CBN Entertainment
+  (`UCstEtN0...`), kapuso-online-live -> GMA Network (`UCKL5hA...`), kapatid-live-stream ->
+  TV5 Philippines (`UCiFx0k...`), News5Everywhere -> TV5 News Philippines (`UCGEbMwi...`).
+  True FM is optional (`--bind "105.9 True FM" UCjUrQJq...`); Ted Failon and DJ Chacha are
+  not guaranteed on the News5 channel, so the picker lists what the bound channel actually
+  serves. Simulcast channels (ABS-CBN Entertainment, GMA Network, TV5 Philippines) emit one
+  stream per day and one row; per-show channels (News5, True FM, ABS-CBN News) emit one row
+  per show.
+- **Gotcha:** `yt_cli.py` is now above 5000 lines, past pi-lens's LSP size limit. Use
+  `pyright yt_cli.py` for type checks; pytest and ruff still work normally.
+- E2E flows updated for the Saved main menu. `flow_f.py` is network-free; flows a to e need
+  network and mpv.

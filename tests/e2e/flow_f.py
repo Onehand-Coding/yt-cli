@@ -64,14 +64,13 @@ def main() -> int:
 
     h = Harness([YT_CLI], env=env, name="flow_f")
     try:
-        ok &= h.wait_for("search / radio / stations / news", 15)
-        h.send("3\r", 0.4)  # main menu: Search Radio Stations
-        ok &= h.wait_for("Stations", 8)
+        ok &= h.wait_for("saved / search / history", 15)
+        h.send("1\r", 0.4)  # Saved
         ok &= h.wait_for("Jazz FM", 8)
-        ok &= h.wait_for("manage stations", 5)
+        ok &= h.wait_for("manage saved", 5)
         h.send("\x1b", 0.4)  # Esc → main menu
         ok &= h.wait_new("main ❯", 8)
-        h.send("x\r", 0.4)  # Exit
+        h.send("4\r", 0.4)  # Exit
         time.sleep(2)
         h.read(1)
         exited = h.done

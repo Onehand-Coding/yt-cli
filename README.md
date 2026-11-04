@@ -1,15 +1,31 @@
 # yt-cli
 
-Unified YouTube **search / radio / news** player — a single-file, stdlib-only Python CLI.
+Unified YouTube **saved channels / radio / news** player — a single-file, stdlib-only Python CLI.
 
-Formerly three scripts (`yt-cli`, `tune`, `news-stream`), merged into one. Dispatch is by `argv[0]` / flags:
+Formerly three scripts (`yt-cli`, `tune`, `news-stream`), merged into one. The home screen is
+**Saved** (channels, stations, presets in one list), plus Search and History. Dispatch is by `argv[0]` / flags:
 
 | Invocation | Mode |
 |---|---|
-| `yt-cli` | Main menu (Search / Radio / News / History) |
-| `yt-cli --radio` | Radio mode |
-| `yt-cli --news` | News mode |
+| `yt-cli` | Main menu (Saved / Search / History) |
+| `yt-cli --radio` | Saved filtered to YouTube presets |
+| `yt-cli --stations` | Saved filtered to internet radio |
+| `yt-cli --news` | Saved filtered to channels (live shows) |
 | `~/.local/bin/music/<preset>` | Radio preset (relative symlink → `../yt-cli`) |
+
+## Channels
+
+A news source is a YouTube **channel**, never a saved stream link. Picking a channel fetches its
+`/streams` tab and lists what is live now, what is upcoming, and recent replays. Stream IDs rotate
+daily; the channel does not.
+
+```bash
+yt-cli --news                     # channel list, live shows first
+yt-cli --news news5everywhere     # play the top live, or print the list if nothing is live
+yt-cli --news news5everywhere --replay   # opt in to the newest replay
+yt-cli --news --verify            # check every channel binding, report only
+yt-cli --news --verify --apply    # fill exact-name ids, disable confirmed 404s
+```
 
 ## Layout
 

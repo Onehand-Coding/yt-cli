@@ -37,7 +37,7 @@ def main():
     try:
         # -- 1. main -> Search -> paste URL -> save as preset
         ok1 = h.wait_for("main ❯", 15)
-        h.send("1\r", 0.4)
+        h.send("2\r", 0.4)  # Saved, Search
         ok1 &= h.wait_new("search ❯", 10)
         h.send(URL + "\r", 0.02)
         ok1 &= h.wait_new("URL:", 60)
@@ -68,8 +68,8 @@ def main():
         h.send("k\r", 0.4)
         ok2 &= h.wait_new('Save "', 10)
         time.sleep(1.5)
-        ok2 &= h.wait_for("music/video", 10)
-        h.send("music\r", 0.4)
+        ok2 &= h.wait_for("save as preset", 10)
+        h.send("p\r", 0.4)
         ok2 &= h.wait_new("yes, save as preset", 10)
         h.send("yes\r", 0.4)
         ok2 &= h.wait_new("name", 10)
@@ -91,7 +91,7 @@ def main():
             ok3 = False
         h.send("go\r", 0.4)
         ok3 &= h.wait_new("go to ❯", 10)
-        h.send("3\r", 0.4)              # go-to: Radio, Stations, News
+        h.send("4\r", 0.4)              # go-to: Saved, Radio, Stations, News
         ok3 &= h.wait_new("source ❯", 15)
         time.sleep(1.0)
         mpv_after = subprocess.run(["pgrep", "-x", "mpv"],

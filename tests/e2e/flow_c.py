@@ -11,7 +11,7 @@ def flow_c():
     h = Harness([YT_CLI, "--news"], name="news")
     ok = True
     ok &= h.wait_new("source ❯", 15)
-    h.send("1\r", 0.4)
+    h.send("news5everywhere\r", 0.4)
     ok &= h.wait_new("stream ❯", 120)
     h.send("1\r", 0.4)
     ok &= h.wait_new("action ❯", 15)
