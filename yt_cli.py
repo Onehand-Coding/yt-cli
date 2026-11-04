@@ -3219,7 +3219,10 @@ def _parse_count(text):
     match = re.match(r"([\d.,]+)\s*([KMB]?)", (text or "").strip(), re.I)
     if not match:
         return 0
-    number = float(match.group(1).replace(",", ""))
+    try:
+        number = float(match.group(1).replace(",", "").strip("."))
+    except ValueError:
+        return 0
     multiplier = {"": 1, "K": 1_000, "M": 1_000_000, "B": 1_000_000_000}
     return int(number * multiplier[match.group(2).upper()])
 
@@ -3339,6 +3342,158 @@ def channel_streams_url(channel_id):
     if not re.fullmatch(r"[A-Za-z0-9_-]{2,64}", channel_id or ""):
         raise ChannelError("invalid channel id")
     return f"https://www.youtube.com/channel/{channel_id}/streams"
+
+
+def page_title(html_content):
+    match = re.search(r"<title>(.*?)</title>", html_content or "", re.S | re.I)
+    if not match:
+        return ""
+    title = html.unescape(match.group(1)).strip()
+    if title.endswith(" - YouTube"):
+        title = title[: -len(" - YouTube")]
+    return title
+
+
+def resolve_channel_id(ref, timeout=15):
+    """Resolve UC..., @handle, a handle, or a channel URL to {id, title}."""
+    ref = (ref or "").strip()
+    if not ref:
+        return None
+    if ref.startswith("http"):
+        url = ref
+        from_url = re.search(r"/channel/(UC[\w-]{20,24})", ref)
+        by_id = from_url.group(1) if from_url else None
+    elif ref.startswith("@"):
+        url = "https://www.youtube.com/" + ref
+        by_id = None
+    elif re.fullmatch(r"UC[\w-]{20,24}", ref):
+        url = channel_streams_url(ref)
+        by_id = ref
+    else:
+        url = "https://www.youtube.com/@" + ref
+        by_id = None
+
+    html_content = fetch_url(url, timeout=timeout)
+    if not html_content or html_content.startswith(("Error", "HTTP")):
+        return None
+
+    match = re.search(
+        r'<link rel="canonical" href="https://www\.youtube\.com/channel/(UC[\w-]{20,24})"',
+        html_content,
+    )
+    if not match:
+        match = re.search(r'"browseId":"(UC[\w-]{20,24})"', html_content)
+    if not match and by_id:
+        match = re.match(r"(UC[\w-]{20,24})", by_id)
+    if not match:
+        return None
+    return {"id": match.group(1), "title": page_title(html_content)}
+
+
+def channel_status(entry, timeout=15):
+    """Read-only channel check. Never rewrites the entry."""
+    channel_id = (entry or {}).get("channel_id") or ""
+    name = (entry or {}).get("name") or (entry or {}).get("id", "")
+    result = {
+        "id": (entry or {}).get("id", ""),
+        "name": name,
+        "channel_id": channel_id,
+        "channel_title": "",
+        "status": "missing-id",
+        "error": "",
+        "duplicate": False,
+    }
+    if not channel_id:
+        return result
+    try:
+        html_content = fetch_url(channel_streams_url(channel_id), timeout=timeout)
+    except (OSError, ValueError) as exc:
+        result["status"] = "unknown"
+        result["error"] = str(exc)
+        return result
+    if html_content.startswith(("Error", "HTTP")):
+        result["status"] = "dead" if "404" in html_content else "unknown"
+        result["error"] = html_content[:80]
+        return result
+    title = page_title(html_content)
+    result["channel_title"] = title
+    if not title:
+        result["status"] = "unknown"
+        result["error"] = "no page title"
+        return result
+    expected = ((entry or {}).get("channel_name") or name).strip().lower()
+    result["status"] = "ok" if title.strip().lower() == expected else "label-mismatch"
+    return result
+
+
+def verify_channels(cfg, timeout=15):
+    sources = (cfg.get("news") or {}).get("sources") or []
+    report = [channel_status(entry, timeout) for entry in sources]
+    counts = {}
+    for item in report:
+        if item["channel_id"]:
+            counts[item["channel_id"]] = counts.get(item["channel_id"], 0) + 1
+    for item in report:
+        item["duplicate"] = counts.get(item["channel_id"], 0) > 1
+    return report
+
+
+def apply_channel_fixes(cfg, report):
+    """Apply only the safe subset: exact-name ids, confirmed-dead disables."""
+    sources = (cfg.get("news") or {}).get("sources") or []
+    by_id = {entry.get("id"): entry for entry in sources}
+    bound = disabled = skipped = 0
+    for item in report:
+        entry = by_id.get(item.get("id"))
+        if not entry:
+            skipped += 1
+            continue
+        status = item.get("status")
+        if status == "missing-id":
+            resolved = resolve_channel_id(item.get("name") or "")
+            exact = (
+                resolved
+                and (resolved.get("title") or "").strip().lower()
+                == (item.get("name") or "").strip().lower()
+            )
+            if exact and resolved:
+                entry["channel_id"] = resolved["id"]
+                entry["channel_name"] = resolved["title"]
+                bound += 1
+            else:
+                skipped += 1
+        elif status == "dead":
+            entry["enabled"] = False
+            disabled += 1
+        else:
+            skipped += 1
+    if bound or disabled:
+        save_config(cfg)
+    return {"bound": bound, "disabled": disabled, "skipped": skipped}
+
+
+def bind_channel(cfg, source_id, ref):
+    """Point an existing source at a channel. Returns the new binding or None."""
+    sources = (cfg.get("news") or {}).get("sources") or []
+    target = None
+    needle = (source_id or "").lower()
+    for entry in sources:
+        if (entry.get("id") or "").lower() == needle:
+            target = entry
+            break
+    if target is None:
+        return None
+    resolved = resolve_channel_id(ref)
+    if not resolved:
+        return None
+    target["channel_id"] = resolved["id"]
+    target["channel_name"] = resolved["title"]
+    save_config(cfg)
+    return {
+        "id": target["id"],
+        "channel_id": resolved["id"],
+        "channel_title": resolved["title"],
+    }
 
 
 def choose_cli_stream(items, allow_replay=False):
@@ -3755,7 +3910,13 @@ def manage_sources_screen(cfg, ui):
         index_map = []
         for s in all_sources:
             status = c(C.GREEN, "●") if s["enabled"] else c(C.DIM, "○")
-            lines.append(f"{status}  {s['name']}  {c(C.DIM, '[' + s['id'] + ']')}")
+            binding = s.get("channel_name") or (
+                c(C.YELLOW, "⚠ no channel id") if not s.get("channel_id") else ""
+            )
+            lines.append(
+                f"{status}  {s['name']}  {c(C.DIM, '[' + s['id'] + ']')}"
+                + (f"  {c(C.DIM, binding)}" if binding else "")
+            )
             index_map.append(s)
         idx = ui.pick(lines, "source ❯ ", "Manage sources\n" + "─" * 44 + "\nEsc → back", "60%")
         if idx is None:
@@ -3765,21 +3926,72 @@ def manage_sources_screen(cfg, ui):
         toggle_label = "disable" if target["enabled"] else "enable"
         action = ui.action(
             [f"{'●' if target['enabled'] else '○'}  {target['name']}  [{target['id']}]", "─" * 44],
-            [(toggle_label, toggle_label), ("delete", "delete"), ("back", "back")],
+            [
+                (toggle_label, toggle_label),
+                ("verify channels", "verify"),
+                ("change binding", "rebind"),
+                ("remove", "remove"),
+                ("back", "back"),
+            ],
         )
         if action == "back":
             continue
-        if action == "delete":
+        if action == "verify":
+            report = verify_channels(cfg)
+            lines = []
+            for item in report:
+                dup = " (duplicate binding)" if item.get("duplicate") else ""
+                lines.append(
+                    f"{item['status']:<14} {item['name']} -> "
+                    f"{item.get('channel_title') or item.get('channel_id') or '-'}{dup}"
+                )
+            fixable = any(
+                item["status"] in ("dead", "missing-id") for item in report
+            )
+            ui.info(lines, wait=False)
+            if fixable and ui.action(
+                ["Apply safe fixes? (exact-name ids, confirmed dead)", "─" * 44],
+                [("yes, apply", "yes"), ("no, report only", "no")],
+            ) == "yes":
+                counts = apply_channel_fixes(cfg, report)
+                ui.info(
+                    [
+                        f"✓ bound {counts['bound']} · disabled {counts['disabled']}"
+                        f" · skipped {counts['skipped']}"
+                    ],
+                    wait=False,
+                )
+        elif action == "rebind":
+            ref = ui.query(
+                [
+                    f"Rebind {target['name']}",
+                    "─" * 44,
+                    "Enter @handle, channel URL, or UC...   Esc → back",
+                ]
+            )
+            if ref and ref.strip():
+                resolved = bind_channel(cfg, target["id"], ref.strip())
+                if resolved:
+                    ui.info(
+                        [
+                            f"✓ {target['name']} -> {resolved['channel_title']}",
+                            resolved["channel_id"],
+                        ],
+                        wait=False,
+                    )
+                else:
+                    ui.info(["⚠  Could not resolve that channel."], wait=False)
+        elif action == "remove":
             confirmed = (
                 ui.action(
-                    [f'Delete "{target["name"]}"?', "─" * 44],
-                    [("yes, delete", "yes"), ("no, keep", "no")],
+                    [f'Remove "{target["name"]}"?', "─" * 44],
+                    [("yes, remove", "yes"), ("no, keep", "no")],
                 )
                 == "yes"
             )
             if confirmed:
                 news_delete_source(cfg, target["id"])
-                ui.info([f"✓  Deleted {target['name']}"], wait=False)
+                ui.info([f"✓  Removed {target['name']}"], wait=False)
         elif action in ("enable", "disable"):
             news_toggle_source(cfg, target["id"], enable=(action == "enable"))
             ui.info([f"✓  {target['name']} is now {action}d"], wait=False)
@@ -4135,6 +4347,8 @@ USAGE:
     yt-cli --news / -n            Interactive TUI mode (news)
     yt-cli --news <source> [player] [--replay]  Play the channel's live
     yt-cli --news --list
+    yt-cli --news --verify [--apply] [--json]
+    yt-cli --news --bind <source-id> <@handle|UC...|url>
     yt-cli --news --config
     yt-cli --news --help
 
@@ -4348,6 +4562,37 @@ def _news_cli_main():
 
     if args[0] in ("--config", "-c", "config", "--edit"):
         edit_news_config()
+        sys.exit(0)
+
+    if args[0] == "--verify":
+        report = verify_channels(cfg)
+        if "--json" in args:
+            print(json.dumps(report, indent=2))
+            sys.exit(0)
+        for item in report:
+            dup = " (duplicate binding)" if item.get("duplicate") else ""
+            bound = item.get("channel_title") or item.get("channel_id") or "-"
+            label = item.get("name") or item.get("id")
+            print(f"  {item['status']:<14} {label:<24} -> {bound}{dup}")
+            if item.get("error"):
+                print(f"                 {item['error']}")
+        if "--apply" in args:
+            counts = apply_channel_fixes(cfg, report)
+            print(
+                f"\n✅ bound {counts['bound']} · disabled {counts['disabled']}"
+                f" · skipped {counts['skipped']}"
+            )
+        sys.exit(0)
+
+    if args[0] == "--bind":
+        if len(args) < 3:
+            print("❌ usage: yt-cli --news --bind <source-id> <@handle|UC...|url>")
+            sys.exit(1)
+        resolved = bind_channel(cfg, args[1], args[2])
+        if not resolved:
+            print("❌ could not resolve that channel")
+            sys.exit(1)
+        print(f"✓ {resolved['id']} -> {resolved['channel_title']} ({resolved['channel_id']})")
         sys.exit(0)
 
     source_query = args[0].lower()

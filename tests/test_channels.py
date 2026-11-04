@@ -192,3 +192,111 @@ def test_choose_cli_stream_refuses_when_no_live():
     replay = yt_cli.choose_cli_stream(items, allow_replay=True)
     assert replay is not None
     assert replay["title"] == "Old"
+
+
+@pytest.fixture
+def cfg_files(tmp_path, monkeypatch):
+    monkeypatch.setattr(yt_cli, "CONFIG_DIR", tmp_path)
+    monkeypatch.setattr(yt_cli, "CONFIG_PATH", tmp_path / "config.json")
+    return tmp_path
+
+
+def test_channel_status_mismatch_is_reported_not_applied(monkeypatch, cfg_files):
+    cfg = {
+        "news": {
+            "sources": [
+                {"id": "news5", "name": "News5Everywhere", "channel_id": "UCx", "enabled": True}
+            ]
+        }
+    }
+    monkeypatch.setattr(
+        yt_cli,
+        "fetch_url",
+        lambda url, timeout=15: "<html><title>TV5 News Philippines - YouTube</title></html>",
+    )
+    report = yt_cli.verify_channels(cfg)
+    assert report[0]["status"] == "label-mismatch"
+    assert report[0]["channel_title"] == "TV5 News Philippines"
+    yt_cli.apply_channel_fixes(cfg, report)
+    assert cfg["news"]["sources"][0]["channel_id"] == "UCx"
+
+
+def test_channel_status_missing_id_is_not_playable():
+    entry = {"id": "x", "name": "X", "channel_id": ""}
+    assert yt_cli.channel_status(entry)["status"] == "missing-id"
+
+
+def test_verify_flags_duplicate_bindings(monkeypatch, cfg_files):
+    cfg = {
+        "news": {
+            "sources": [
+                {"id": "a", "name": "A", "channel_id": "UCx"},
+                {"id": "b", "name": "B", "channel_id": "UCx"},
+            ]
+        }
+    }
+    monkeypatch.setattr(
+        yt_cli,
+        "fetch_url",
+        lambda url, timeout=15: "<html><title>A - YouTube</title></html>",
+    )
+    report = yt_cli.verify_channels(cfg)
+    assert all(item["duplicate"] is True for item in report)
+
+
+def test_resolve_channel_id_from_handle(monkeypatch):
+    html = (
+        '<html><head><title>TV5 News Philippines - YouTube</title>'
+        '<link rel="canonical" href="https://www.youtube.com/channel/UCGEbMwiX774cseKvJqF9R2g">'
+        "</head></html>"
+    )
+    monkeypatch.setattr(yt_cli, "fetch_url", lambda url, timeout=15: html)
+    resolved = yt_cli.resolve_channel_id("@TV5NewsPH")
+    assert resolved is not None
+    assert resolved["id"] == "UCGEbMwiX774cseKvJqF9R2g"
+    assert resolved["title"] == "TV5 News Philippines"
+
+
+def test_apply_channel_fixes_binds_exact_name_only(monkeypatch, cfg_files):
+    cfg = {
+        "news": {
+            "sources": [
+                {"id": "news5", "name": "News5 Everywhere", "channel_id": "", "enabled": True},
+                {"id": "other", "name": "Some Channel", "channel_id": "", "enabled": True},
+            ]
+        }
+    }
+    report = [
+        {"id": "news5", "name": "News5 Everywhere", "status": "missing-id"},
+        {"id": "other", "name": "Some Channel", "status": "missing-id"},
+    ]
+
+    def fake_resolve(ref, timeout=15):
+        if ref == "News5 Everywhere":
+            return {"id": "UCabc", "title": "News5 Everywhere"}
+        return {"id": "UCdef", "title": "Totally Different"}
+
+    monkeypatch.setattr(yt_cli, "resolve_channel_id", fake_resolve)
+    counts = yt_cli.apply_channel_fixes(cfg, report)
+    assert counts["bound"] == 1
+    assert counts["skipped"] == 1
+    assert cfg["news"]["sources"][0]["channel_id"] == "UCabc"
+    assert cfg["news"]["sources"][1]["channel_id"] == ""
+
+
+def test_apply_channel_fixes_disables_dead(monkeypatch, cfg_files):
+    cfg = {"news": {"sources": [{"id": "dead", "name": "Dead", "channel_id": "UCx"}]}}
+    report = [{"id": "dead", "name": "Dead", "status": "dead"}]
+    counts = yt_cli.apply_channel_fixes(cfg, report)
+    assert counts["disabled"] == 1
+    assert cfg["news"]["sources"][0]["enabled"] is False
+
+
+def test_resolve_channel_id_from_channel_url(monkeypatch):
+    html = '<html><head><title>TV5 News Philippines - YouTube</title></head></html>'
+    monkeypatch.setattr(yt_cli, "fetch_url", lambda url, timeout=15: html)
+    resolved = yt_cli.resolve_channel_id(
+        "https://www.youtube.com/channel/UCGEbMwiX774cseKvJqF9R2g"
+    )
+    assert resolved is not None
+    assert resolved["id"] == "UCGEbMwiX774cseKvJqF9R2g"
