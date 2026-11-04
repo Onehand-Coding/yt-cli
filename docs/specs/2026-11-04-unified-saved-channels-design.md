@@ -1,6 +1,6 @@
 # Unified Saved catalog + channel-first news
 
-Status: awaiting approval. Date: 2026-11-04.
+Status: implemented 2026-11-04.
 
 ## Intent
 
@@ -429,3 +429,10 @@ already fixed.
   semantics.
 - Regression: `uv run --extra dev pytest` green, `ruff` clean, and the five E2E
   flows pass or have a documented reason.
+
+## Implementation notes (2026-11-04)
+
+- `--news --add` was added; `--apply` cannot create entries.
+- `--bind` and `--apply` resolve a plain name with an exact channel-title search.
+- The four daily channels were bound. True FM was not added by default.
+- CI lives in `.github/workflows/ci.yml`; pyright is a dev dependency.

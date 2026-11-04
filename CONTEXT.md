@@ -13,10 +13,11 @@ Dispatch is by `Path(sys.argv[0]).name` (argv[0] is preserved by Python when
 running through the wrapper, and `sys.path[0]` resolves the music/* → ../yt-cli
 → repo symlink chain, so `import yt_cli` works): `yt-cli` → main menu, a music/<preset>
 symlink → radio preset lookup + direct play, `tune`/`news-stream` names → radio/news
-(kept for backward compat if re-symlinked). A unified main menu
-(Search / Radio / News / History / Exit), harmonized action menu, universal
-search from any mode, shared history, config migration from the old INI files,
-and a universal curses fallback (used by ALL modes when `fzf` is unavailable).
+(kept for backward compat if re-symlinked). The home screen is
+Saved / Search / History; radio and news are filters over Saved. It has a
+harmonized action menu, search from any mode, shared history, config migration
+from the old INI files, and a curses fallback used by all modes when `fzf` is
+unavailable.
 Music symlinks in `~/.local/bin/music/` point to `../yt-cli` — running
 `music/lofi` resolves the "lofi" preset by argv[0] name and plays it.
 Saved-station symlinks use the same directory and dispatch: `music/<slug>`
@@ -42,13 +43,14 @@ directly at the wrapper file — still correct. E2E harness: `tests/e2e/`. Proje
 - **Watcher** — `_ipc_watch(name, done)` is a daemon thread that connects to
   mpv's IPC socket (`/tmp/mpvsocket`, set in mpv.conf), spins
   Resolving→Buffering→`▶ playing`; event-phase deadline 60s from connect.
-- **Modes** — `run_radio_mode`/`run_stations_mode`/`run_news_mode`/`run_search_mode`
-  share the action-menu loop. Action-menu loop is the OUTER loop, results/preset picker
-  INNER; Esc from a picker with a live player returns to the action menu;
-  `q` stops and returns home; `x` exits. Esc at the radio preset / news
-  source list goes HOME keeping playback when launched from the main menu
-  (`on_esc="home"`); direct `--radio`/`--news` launches keep old behavior
-  (stop + quit). Results/history pickers honor `return_home` on Esc.
+- **Modes** — `run_saved_mode` owns the Saved entry. The per-kind modes keep their
+  playing loops and are reached with `initial_slug` (preset/station) or
+  `initial_source` (channel). The action menu is the outer loop and the picker is
+  inner; Esc from a picker with a live player returns to the action menu. `stop`
+  returns to the list, `detach` exits and leaves the player running, `exit` stops
+  and exits. Esc at the preset/radio/channel list goes home with playback kept
+  when launched from the main menu (`on_esc="home"`); direct `--radio`/`--news`
+  launches keep stop-and-quit. Results and history honor `return_home`.
 - **Config** — `~/.config/yt-cli/config.json` (migrated: history_size,
   mpv_args, news, radio, result_count). Originals at
   `~/.config/tune/config.ini` + `~/.config/news-stream/config.ini` are NEVER
@@ -112,11 +114,12 @@ directly at the wrapper file — still correct. E2E harness: `tests/e2e/`. Proje
 `tests/e2e/pty_harness.py` + `flow_a.py` (search/actions),
 `flow_b.py` (radio + universal search, via `yt-cli --radio`), `flow_c.py`
 (news, via `yt-cli --news`), `flow_d.py` (curses fallback via fzf-free PATH),
-`flow_f.py` (Stations with an isolated `HOME`; no network/playback).
-All five PASS on the merged script. Run: `python3 flow_*.py` (kills stray
-mpv/fzf first; each takes 1-5 min; requires network). Harness gotchas from
-the yt-cli2 work, still valid for any fzf-flow testing:
-- `FzfUI.action` labels are NOT numbered — select by typing label text
+`flow_e.py` (save and navigation), `flow_f.py` (radio with an isolated `HOME`;
+no network/playback). All six flows pass. Run: `python3 flow_*.py` (kills stray
+mpv/fzf first; each takes 1-5 min; requires network). Harness notes from the
+yt-cli2 work, still valid for any fzf-flow testing:
+
+- `FzfUI.action` labels are NOT numbered: select by typing label text
   (`yes\r`), not `1\r`; an unmatched query yields an empty selection which
   the action loop treats as `"q"`.
 - An fzf opening immediately after another fzf's teardown can eat the
@@ -139,9 +142,9 @@ REMOVED. Saving a news stream auto-captures channel_id via `resolve_url_meta`
 (one yt-dlp dump; fallback: keyword-only source) with
 fallback_url=channel /streams — saved sources equal migrated ones. URLs
 pasted into any query box (`looks_like_url`) open `url_entry_flow`:
-play · save as preset · save as news channel · cancel (radio's preset box
-auto-plays URLs as before, now savable + www./youtu.be detected). E2E:
-`flow_e.py` covers all of it; flows a–d regression-PASS.
+play, save as preset, save as news channel, cancel (radio's preset box
+auto-plays URLs as before, now savable, and `www.` / `youtu.be` links are
+detected). E2E: `flow_e.py` covers it; flows a to f pass.
 
 ## Config vs state split (2026-08-21)
 
@@ -269,55 +272,41 @@ Spec: `docs/specs/2026-10-23-stations-mode-design.md`.
   curses diff-renders only the tail of a line whose prefix matches the
   previous frame.
 
-## Unified Saved catalog + channel-first news (2026-11-04)
+## Saved catalog and channel sources (2026-11-04)
 
 Spec: `docs/specs/2026-11-04-unified-saved-channels-design.md`.
-Plan: `docs/plans/2026-11-04-unified-saved-channels.md`.
 
-- **Main menu is Saved / Search / History** (+ `▶ Now Playing`). Radio, Stations, and News
-  are filters over Saved, not separate home entries. `--radio`, `--stations`, and `--news`
-  open Saved filtered by kind and keep their old pickers; `run_saved_mode` dispatches a
-  selected item by calling the mode with `initial_slug` (preset/station) or `initial_source`
-  (channel). `saved_items(cfg)` is a read adapter over `radio.presets`, `stations`, and
-  `news.sources`; there is no on-disk schema change and `raw` keeps the original record so
-  `build_mpv_cmd`/`_station_play` still see `radio`, `stationuuid`, `tags`, and friends.
-- **A news source is a channel, not a keyword search.** `channel_lives(channel_id)` fetches
-  `/channel/<id>/streams` and parses `lockupViewModel`. Channel pages no longer emit
-  `videoRenderer`; the old `find_streams()` returned 0 items and nobody noticed, so every
-  channel source silently fell through to a YouTube-wide search. Live evidence comes from the
-  page metadata: `N watching` = live, `waiting`/`Scheduled for` = upcoming, `Streamed N ago` =
-  past. Cross-checked against `yt-dlp --print live_status`. Sort is live (viewers desc),
-  upcoming, past (newest first).
-- **The PAW Patrol drift fix.** Global search (`search_live`) uses whole-phrase matching
-  (`phrase_in_title`), so "tv patrol" does not match "PAW Patrol Livestream". Channel paths
-  never merge a YouTube-wide search, and never fall back to one; a page that cannot be read
-  raises `ChannelError` and the UI says so.
-- **Save semantics.** `save_options(item)` derives the menu from context: a channel live
-  saves the channel, a video offers preset first, a station saves the station. Channel saves
-  no longer prompt for keywords; `channel_name` stores the resolved YouTube title.
-- **Verify is report-only by default.** `--news --verify [--apply] [--json]` checks each
-  binding via its `/streams` page. `label-mismatch` is never auto-renamed or rebound; `dead`
-  requires a confirmed 404 and is disabled, not deleted; timeouts are `unknown`.
-  `--news --bind <source-id> <@handle|UC...|url>` rebinds deliberately.
-- **CLI honesty.** `--news <channel>` plays the top live only. If nothing is live it prints
-  live/upcoming/replays and exits 0; `--replay` opts into the newest replay. No silent VOD.
-- **Day-one bindings (2026-11-04):** kapamilya-online-live -> ABS-CBN Entertainment
-  (`UCstEtN0...`), kapuso-online-live -> GMA Network (`UCKL5hA...`), kapatid-live-stream ->
-  TV5 Philippines (`UCiFx0k...`), News5Everywhere -> TV5 News Philippines (`UCGEbMwi...`).
-  True FM is optional (`--bind "105.9 True FM" UCjUrQJq...`); Ted Failon and DJ Chacha are
-  not guaranteed on the News5 channel, so the picker lists what the bound channel actually
-  serves. Simulcast channels (ABS-CBN Entertainment, GMA Network, TV5 Philippines) emit one
-  stream per day and one row; per-show channels (News5, True FM, ABS-CBN News) emit one row
-  per show.
-- **Naming:** in the UI, internet radio is `Radio` (kind tag `[radio]`, manage -> Radio)
-  and YouTube presets are `Presets`. The CLI flags keep their historical names:
-  `--radio` opens presets, `--stations` opens internet radio.
-- **Playing actions:** `stop` (q), `detach` (d, keeps playing), and `exit` (x, stops)
-  are the three exits. `pause`/`play` appears only when the item can pause (VOD, replays,
-  search results, presets) and is implemented over IPC with `cycle pause`; live news and
-  internet radio do not show it. `change audio` is the news output-player action, renamed
-  so the label does not collide with `pause`.
-- **Gotcha:** `yt_cli.py` is now above 5000 lines, past pi-lens's LSP size limit. Use
-  `pyright yt_cli.py` for type checks; pytest and ruff still work normally.
-- E2E flows updated for the Saved main menu. `flow_f.py` is network-free; flows a to e need
-  network and mpv.
+- **Home** is Saved / Search / History, plus `Now Playing`. `saved_items(cfg)` reads
+  `radio.presets`, `stations`, and `news.sources` into one list; no config key changed.
+  `raw` keeps the original record for `build_mpv_cmd` and `_station_play`.
+  `run_saved_mode` dispatches by kind and enters the mode with `initial_slug` or
+  `initial_source`.
+- **Channels** are the unit for news. `channel_lives` reads `/channel/<id>/streams`
+  and parses `lockupViewModel`. Channel pages no longer emit `videoRenderer`, which is
+  why the old `find_streams` returned nothing. Status comes from the metadata rows:
+  `N watching` is live, `Scheduled for` is upcoming, `Streamed N ago` is past. Order is
+  live by viewers, upcoming, then past.
+- **Search** is separate. `search_live` uses whole-phrase matching, so "tv patrol" does
+  not match "PAW Patrol Livestream". A channel source never merges a YouTube-wide
+  search; a page that cannot be read raises `ChannelError`.
+- **Saving:** `save_options(item)` depends on context. A channel live saves the channel,
+  a video offers a preset first, a station saves the station. Channel entries store
+  `channel_name` and do not ask for keywords.
+- **Verify:** `--news --verify [--apply] [--json]` is report-only by default. A label
+  mismatch is not renamed or rebound. A confirmed 404 is disabled, not deleted; timeouts
+  are `unknown`. `--bind` changes an existing source; `--add` creates one.
+- **CLI:** `--news <channel>` plays the top live. If none is live it prints the list and
+  exits 0; `--replay` plays the newest replay.
+- **Bindings on this machine:** kapamilya-online-live, kapuso-online-live,
+  kapatid-live-stream, and News5Everywhere point to ABS-CBN Entertainment, GMA Network,
+  TV5 Philippines, and TV5 News Philippines. True FM is optional and not added by
+  default. Simulcast channels emit one stream per day; News5, True FM, and ABS-CBN News
+  emit one row per show.
+- **Names:** internet radio is Radio (`[radio]`, manage then Radio); YouTube presets
+  are Presets. Legacy flags: `--radio` opens presets, `--stations` opens radio.
+- **Playing actions:** `stop`, `detach`, `exit`. `pause`/`play` appears for VOD, replays,
+  search results, and presets; it is hidden for live news and radio. `change audio` is
+  the news output-player action.
+- **Checks:** CI runs `ruff check .`, `pyright yt_cli.py`, and `pytest` on pushes to
+  `main` and on pull requests. `yt_cli.py` is above 5000 lines, past pi-lens's LSP
+  limit, so use the pyright CLI.
