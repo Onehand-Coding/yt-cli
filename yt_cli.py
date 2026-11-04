@@ -1284,12 +1284,14 @@ def now_playing_screen(cfg, ui):
 def _run_mode(cfg, ui, choice, stop, play_mpv, goodbye, on_esc="quit"):
     if choice == "Search":
         run_search_mode(cfg, ui, stop, play_mpv, return_home=True)
+    elif choice == "Saved":
+        run_saved_mode(cfg, ui, None, stop, goodbye, on_esc=on_esc)
     elif choice == "Radio":
-        run_radio_mode(cfg, ui, stop, play_mpv, goodbye, on_esc=on_esc)
+        run_saved_mode(cfg, ui, "preset", stop, goodbye, on_esc=on_esc)
     elif choice == "Stations":
-        run_stations_mode(cfg, ui, stop, goodbye, on_esc=on_esc)
+        run_saved_mode(cfg, ui, "station", stop, goodbye, on_esc=on_esc)
     elif choice == "News":
-        run_news_mode(cfg, ui, stop, goodbye, on_esc=on_esc)
+        run_saved_mode(cfg, ui, "channel", stop, goodbye, on_esc=on_esc)
     elif choice == "History":
         run_history_screen(cfg, ui, stop, play_mpv)
 
@@ -1326,11 +1328,11 @@ def run_fzf(cfg, mode=None):
 
     while True:
         clear_screen()
-        entries = ["Search", "Radio", "Stations", "News", "History"]
+        entries = ["Saved", "Search", "History"]
         if player_active():
             entries.insert(0, "▶ Now Playing")
         entries.append("Exit")
-        idx = ui.pick(entries, "main ❯ ", "yt-cli · search / radio / stations / news", "50%")
+        idx = ui.pick(entries, "main ❯ ", "yt-cli · saved / search / history", "50%")
         if idx is None:
             goodbye()
             return
@@ -2054,15 +2056,22 @@ class GoTo(Exception):
         self.dest = dest
 
 
-GO_TO_LABELS = {"radio": "Radio", "stations": "Stations", "news": "News", "search": "Search"}
+GO_TO_LABELS = {
+    "saved": "Saved",
+    "radio": "Radio",
+    "stations": "Stations",
+    "news": "News",
+    "search": "Search",
+}
 
 
 def go_to_picker(ui):
-    entries = ["Radio", "Stations", "News", "Search", "Home"]
+    entries = ["Saved", "Radio", "Stations", "News", "Search", "Home"]
     idx = ui.pick(entries, "go to ❯ ", "Go to\n" + "─" * 44 + "\nEsc → stay here", "35%")
     if idx is None:
         return None
     return {
+        "Saved": "saved",
         "Radio": "radio",
         "Stations": "stations",
         "News": "news",
@@ -2181,7 +2190,7 @@ def url_entry_flow(cfg, ui, url):
     return None
 
 
-def run_radio_mode(cfg, ui, stop, play_mpv, goodbye, on_esc="quit"):
+def run_radio_mode(cfg, ui, stop, play_mpv, goodbye, on_esc="quit", initial_slug=None):
     settings, presets = load_radio_cfg(cfg)
     now_playing = [None]
     search_cache = {}
@@ -2199,6 +2208,13 @@ def run_radio_mode(cfg, ui, stop, play_mpv, goodbye, on_esc="quit"):
             {"title": info["name"], "url": info["url"], "uploader": info["category"]},
             cfg["history_size"],
         )
+
+    if initial_slug:
+        info = presets.get(initial_slug)
+        if info:
+            play_radio(info)
+            radio_playing_loop(cfg, ui, info, settings, stop, play_radio, goodbye)
+        return
 
     while True:
         np_name = now_playing[0]["name"] if now_playing[0] else None
@@ -3020,7 +3036,16 @@ def station_playing_loop(cfg, ui, station, stop_fn, play_fn, goodbye_fn):
             sys.exit(0)
 
 
-def run_stations_mode(cfg, ui, stop, goodbye, on_esc="quit"):
+def run_stations_mode(cfg, ui, stop, goodbye, on_esc="quit", initial_slug=None):
+    if initial_slug:
+        stations = load_stations_cfg(cfg)
+        target = next((s for s in stations if s.get("slug") == initial_slug), None)
+        if target is not None:
+            play_fn = lambda st: _station_play(cfg, st, stop_fn=stop)  # noqa: E731
+            play_fn(target)
+            station_playing_loop(cfg, ui, target, stop, play_fn, goodbye)
+        return
+
     while True:
         stations = load_stations_cfg(cfg)
         now = NOW_PLAYING[0]
@@ -3118,6 +3143,257 @@ def news_toggle_source(cfg, sid, enable):
 
 def get_all_sources_from_config(cfg):
     return [dict(s) for s in cfg["news"]["sources"]]
+
+
+# ---------- SAVED CATALOG ----------
+
+
+SAVED_KINDS = ("channel", "station", "preset")
+SAVED_MODE = {"preset": "radio", "station": "stations", "channel": "news"}
+KIND_MARK = {"channel": "●", "station": "♪", "preset": "▷"}
+KIND_ORDER = {"channel": 0, "station": 1, "preset": 2}
+
+
+def saved_items(cfg):
+    """One normalized view over the three config areas. Never writes."""
+    items = []
+    for source in (cfg.get("news") or {}).get("sources") or []:
+        items.append(
+            {
+                "kind": "channel",
+                "id": source.get("id", ""),
+                "name": source.get("name") or source.get("id", ""),
+                "enabled": bool(source.get("enabled", True)),
+                "group": "",
+                "url": "",
+                "channel_id": source.get("channel_id") or "",
+                "channel_name": source.get("channel_name") or "",
+                "loop": False,
+                "no_video": False,
+                "raw": source,
+            }
+        )
+    stations = cfg.get("stations")
+    if isinstance(stations, list):
+        for station in stations:
+            items.append(
+                {
+                    "kind": "station",
+                    "id": station.get("slug", ""),
+                    "name": station.get("name") or station.get("url", ""),
+                    "enabled": bool(station.get("enabled", True)),
+                    "group": station.get("countrycode") or "",
+                    "url": station.get("url", ""),
+                    "channel_id": "",
+                    "channel_name": "",
+                    "loop": False,
+                    "no_video": False,
+                    "raw": station,
+                }
+            )
+    presets = (cfg.get("radio") or {}).get("presets") or []
+    for preset in presets:
+        items.append(
+            {
+                "kind": "preset",
+                "id": preset.get("slug", ""),
+                "name": preset.get("name") or preset.get("slug", ""),
+                "enabled": bool(preset.get("enabled", True)),
+                "group": preset.get("category") or "",
+                "url": preset.get("url", ""),
+                "channel_id": "",
+                "channel_name": "",
+                "loop": bool(preset.get("loop", False)),
+                "no_video": bool(preset.get("no_video", False)),
+                "raw": preset,
+            }
+        )
+    items.sort(key=lambda item: (KIND_ORDER[item["kind"]], item["name"].lower()))
+    return items
+
+
+def format_saved_row(item, now_playing=None):
+    mark = KIND_MARK.get(item["kind"], "·")
+    if not item.get("enabled", True):
+        mark = "○"
+    elif now_playing and item["name"] == now_playing:
+        mark = "▶"
+    name = item["name"]
+    name = name[:31] + "…" if len(name) > 32 else name
+    tag = f"[{item['kind']}]"
+    return f"{mark}  {name:<32}  {c(C.DIM, tag)}"
+
+
+def pick_saved(items, ui, kind=None):
+    visible = [item for item in items if item.get("enabled", True)]
+    lines = ["  🔍  search…"]
+    lines += [format_saved_row(item) for item in visible]
+    lines.append("  ⚙   manage saved")
+    index_map = [("search", None)]
+    index_map += [("item", item) for item in visible]
+    index_map.append(("manage", None))
+
+    title = "yt-cli · saved" + (f" · {kind}" if kind else "")
+    header = title + "\n" + "─" * 48 + "\nEsc → back   ·   type to search"
+    query, idx = ui.pick_query(lines, "saved ❯ ", header, "70%")
+    if idx is not None and 0 <= idx < len(index_map):
+        action, value = index_map[idx]
+        if action == "search":
+            return ("search", "")
+        if action == "manage":
+            return ("manage", None)
+        return value
+    q = (query or "").strip()
+    if not q:
+        return None
+    if q.lower() in ("manage saved", "manage", "m"):
+        return ("manage", None)
+    return ("url", q) if looks_like_url(q) else ("search", q)
+
+
+def manage_saved_screen(cfg, ui):
+    entries = ["Presets", "Stations", "Channels", "Back"]
+    idx = ui.pick(entries, "manage ❯ ", "Manage saved\n" + "─" * 44, "35%")
+    if idx is None:
+        return
+    choice = entries[idx]
+    if choice == "Presets":
+        manage_presets_screen(cfg, ui)
+    elif choice == "Stations":
+        manage_stations_screen(cfg, ui)
+    elif choice == "Channels":
+        manage_sources_screen(cfg, ui)
+
+
+def _saved_search(cfg, ui, kind, stop, play_mpv, goodbye):
+    if kind == "station":
+        q = ui.query(["Saved · search radio-browser.info", "─" * 48, "Esc → back"])
+        if not q or not q.strip():
+            return
+        station = _station_search_pick(ui, q.strip())
+        if station:
+            play_fn = lambda st: _station_play(cfg, st, stop_fn=stop)  # noqa: E731
+            play_fn(station)
+            station_playing_loop(cfg, ui, station, stop, play_fn, goodbye)
+        return
+
+    query = ui.query(["Saved · search YouTube", "─" * 48, "Esc → back"])
+    if not query or not query.strip():
+        return
+    query = query.strip()
+    if looks_like_url(query):
+        entry = url_entry_flow(cfg, ui, query)
+        if entry is not None:
+            run_search_mode(
+                cfg,
+                ui,
+                stop,
+                play_mpv,
+                return_home=True,
+                initial_items=[entry],
+                initial_header="yt-cli · url",
+            )
+        return
+    try:
+        results = search_with_spinner(query, cfg["result_count"])
+    except SearchError as exc:
+        ui.info([f"search failed: {exc}"])
+        return
+    if not results:
+        ui.info([f'No results for "{query}"'])
+        return
+    run_search_mode(
+        cfg,
+        ui,
+        stop,
+        play_mpv,
+        return_home=True,
+        initial_items=results,
+        initial_header=f"yt-cli · results: {query} ({len(results)})",
+    )
+
+
+def run_saved_mode(cfg, ui, kind=None, stop=None, goodbye=None, on_esc="quit"):
+    """One entry point for every saved thing. Modes become filters."""
+    stop = stop or stop_shared
+
+    if goodbye is None:
+
+        def default_goodbye():
+            stop()
+            print(f"\n  {c(C.DIM, 'Goodbye! 👋')}\n")
+
+        goodbye = default_goodbye
+
+    play_mpv = _search_play_default(cfg)
+
+    if kind == "preset":
+        run_radio_mode(cfg, ui, stop, play_mpv, goodbye, on_esc=on_esc)
+        return
+    if kind == "station":
+        run_stations_mode(cfg, ui, stop, goodbye, on_esc=on_esc)
+        return
+    if kind == "channel":
+        run_news_mode(cfg, ui, stop, goodbye, on_esc=on_esc)
+        return
+
+    while True:
+        cfg = load_config()
+        result = pick_saved(saved_items(cfg), ui)
+        if result is None:
+            if on_esc == "home":
+                return
+            goodbye()
+            return
+
+        if isinstance(result, tuple):
+            action, value = result
+            if action == "manage":
+                manage_saved_screen(cfg, ui)
+                continue
+            if action == "url":
+                entry = url_entry_flow(cfg, ui, value)
+                if entry is not None:
+                    run_search_mode(
+                        cfg,
+                        ui,
+                        stop,
+                        play_mpv,
+                        return_home=True,
+                        initial_items=[entry],
+                        initial_header="yt-cli · url",
+                    )
+                continue
+            _saved_search(cfg, ui, kind, stop, play_mpv, goodbye)
+            continue
+
+        item = result
+        if not item.get("enabled", True):
+            ui.info([f"{item['name']} is disabled. Enable it in manage saved."])
+            continue
+        if item["kind"] == "channel" and not item["channel_id"]:
+            ui.info(
+                [
+                    f"⚠  {item['name']} has no channel id.",
+                    "manage saved → Channels → change binding",
+                ]
+            )
+            continue
+
+        if item["kind"] == "channel":
+            run_news_mode(cfg, ui, stop, goodbye, on_esc="home", initial_source=item["id"])
+        elif item["kind"] == "station":
+            run_stations_mode(cfg, ui, stop, goodbye, on_esc="home", initial_slug=item["id"])
+        else:
+            run_radio_mode(
+                cfg,
+                ui,
+                stop,
+                play_mpv,
+                goodbye,
+                on_esc="home",
+                initial_slug=item["id"],
+            )
 
 
 # ─── HTTP ─────────────────────────────────────────────────────────────────────
@@ -4762,11 +5038,11 @@ def _curses_main(stdscr, cfg, mode):
 
     detached = False
     while True:
-        entries = ["Search", "Radio", "Stations", "News", "History"]
+        entries = ["Saved", "Search", "History"]
         if player_active():
             entries.insert(0, "▶ Now Playing")
         entries.append("Exit")
-        idx = ui.pick(entries, "main ❯ ", "yt-cli · search / radio / stations / news", "50%")
+        idx = ui.pick(entries, "main ❯ ", "yt-cli · saved / search / history", "50%")
         if idx is None:
             break
         choice = entries[idx]
