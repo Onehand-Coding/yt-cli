@@ -71,3 +71,80 @@ def test_channel_lives_empty_page_is_a_channel_error(monkeypatch):
     monkeypatch.setattr(yt_cli, "extract_yt_initial_data", lambda html: {})
     with pytest.raises(yt_cli.ChannelError, match="could not read"):
         yt_cli.channel_lives("UCx")
+
+
+def test_phrase_filter_rejects_paw_patrol():
+    assert yt_cli.phrase_in_title("tv patrol", "TV Patrol Livestream") is True
+    assert yt_cli.phrase_in_title("tv patrol", "PAW Patrol Livestream") is False
+    assert yt_cli.phrase_in_title("ted   failon", "Ted Failon DJ Chacha") is True
+
+
+def test_search_live_prefers_live_and_skips_recent_when_live_exists(monkeypatch):
+    data = {
+        "contents": {
+            "twoColumnSearchResultsRenderer": {
+                "primaryContents": {
+                    "sectionListRenderer": {
+                        "contents": [
+                            {
+                                "itemSectionRenderer": {
+                                    "contents": [
+                                        {
+                                            "videoRenderer": {
+                                                "videoId": "livelive001",
+                                                "title": {
+                                                    "runs": [
+                                                        {
+                                                            "text": "TV Patrol Livestream | November 4"
+                                                        }
+                                                    ]
+                                                },
+                                                "badges": [
+                                                    {
+                                                        "metadataBadgeRenderer": {
+                                                            "style": "BADGE_STYLE_TYPE_LIVE_NOW"
+                                                        }
+                                                    }
+                                                ],
+                                                "ownerText": {"runs": [{"text": "ABS-CBN News"}]},
+                                            }
+                                        },
+                                        {
+                                            "videoRenderer": {
+                                                "videoId": "recent00001",
+                                                "title": {
+                                                    "runs": [
+                                                        {"text": "TV Patrol Express | November 4"}
+                                                    ]
+                                                },
+                                                "publishedTimeText": {"simpleText": "2 hours ago"},
+                                                "ownerText": {"runs": [{"text": "ABS-CBN News"}]},
+                                            }
+                                        },
+                                        {
+                                            "videoRenderer": {
+                                                "videoId": "pawpaw00001",
+                                                "title": {"runs": [{"text": "PAW Patrol Livestream"}]},
+                                                "badges": [
+                                                    {
+                                                        "metadataBadgeRenderer": {
+                                                            "style": "BADGE_STYLE_TYPE_LIVE_NOW"
+                                                        }
+                                                    }
+                                                ],
+                                                "ownerText": {"runs": [{"text": "PAW Patrol"}]},
+                                            }
+                                        },
+                                    ]
+                                }
+                            }
+                        ]
+                    }
+                }
+            }
+        }
+    }
+    monkeypatch.setattr(yt_cli, "fetch_url", lambda url, timeout=15: "<html>")
+    monkeypatch.setattr(yt_cli, "extract_yt_initial_data", lambda html: data)
+    items = yt_cli.search_live("TV Patrol", include_recent=True)
+    assert [i["id"] for i in items] == ["livelive001"]

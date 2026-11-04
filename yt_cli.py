@@ -3359,181 +3359,150 @@ def channel_lives(channel_id, timeout=15):
     return sort_stream_items(items)
 
 
-def parse_video_renderer(video, keywords, channel_name, recent_hours=24):
-    try:
-        video_id = video.get("videoId", "")
-        title_runs = video.get("title", {}).get("runs", [])
-        title = "".join(run.get("text", "") for run in title_runs)
-        if not title:
-            title = video.get("title", {}).get("simpleText", "")
+def phrase_in_title(query, title):
+    """Whole-phrase match on normalized text.
 
-        title_lower = title.lower()
-        if not any(kw in title_lower for kw in keywords):
-            return None
+    This is the fix for the drift bug: "tv patrol" must not match
+    "PAW Patrol Livestream" just because "patrol live" is a substring.
+    """
 
-        # Live badge check
-        is_live = False
-        for badge in video.get("badges", []):
-            br = badge.get("metadataBadgeRenderer", {})
-            if (
-                br.get("style") == "BADGE_STYLE_TYPE_LIVE_NOW"
-                or br.get("label", "").upper() == "LIVE"
-            ):
-                is_live = True
-                break
+    def norm(text):
+        return re.sub(r"\s+", " ", (text or "").lower()).strip()
 
-        for overlay in video.get("thumbnailOverlays", []):
-            if "thumbnailOverlayTimeStatusRenderer" in overlay:
-                if overlay["thumbnailOverlayTimeStatusRenderer"].get("style") == "LIVE":
-                    is_live = True
-                    break
+    needle = norm(query)
+    return bool(needle) and needle in norm(title)
 
-        # Recency
-        published_text = ""
-        hours_ago = 9999
-        if "publishedTimeText" in video:
-            pt = video["publishedTimeText"]
-            if "runs" in pt:
-                published_text = "".join(r.get("text", "") for r in pt["runs"])
-            else:
-                published_text = pt.get("simpleText", "")
-            hours_ago = parse_relative_time(published_text)
 
-        if not is_live and hours_ago > recent_hours:
-            return None
+def _renderer_title(video):
+    runs = (video.get("title") or {}).get("runs") or []
+    title = "".join(run.get("text", "") for run in runs)
+    return title or (video.get("title") or {}).get("simpleText", "")
 
-        # View count
-        view_count = ""
-        if "viewCountText" in video:
-            vct = video["viewCountText"]
-            if "simpleText" in vct:
-                view_count = vct["simpleText"]
-            elif "runs" in vct:
-                view_count = "".join(r.get("text", "") for r in vct["runs"])
 
-        return {
-            "id": video_id,
-            "title": html.unescape(title),
-            "url": f"https://www.youtube.com/watch?v={video_id}",
-            "is_live": is_live,
-            "view_count": view_count,
-            "published_text": published_text,
-            "hours_ago": hours_ago,
-            "source": channel_name,
-        }
-    except Exception:
+def _renderer_is_live(video):
+    for badge in video.get("badges") or []:
+        renderer = badge.get("metadataBadgeRenderer") or {}
+        if (
+            renderer.get("style") == "BADGE_STYLE_TYPE_LIVE_NOW"
+            or renderer.get("label", "").upper() == "LIVE"
+        ):
+            return True
+    for overlay in video.get("thumbnailOverlays") or []:
+        status = (overlay.get("thumbnailOverlayTimeStatusRenderer") or {}).get("style")
+        if status == "LIVE":
+            return True
+    return False
+
+
+def parse_search_video(video):
+    """One search videoRenderer -> a stream item (no keyword filtering here)."""
+    video_id = video.get("videoId") or ""
+    title = _renderer_title(video)
+    if not video_id or not title:
         return None
+    runs = (video.get("ownerText") or {}).get("runs") or []
+    source = "".join(run.get("text", "") for run in runs)
+    live = _renderer_is_live(video)
+    published = ""
+    published_text = video.get("publishedTimeText") or {}
+    if "simpleText" in published_text:
+        published = published_text["simpleText"]
+    elif "runs" in published_text:
+        published = "".join(run.get("text", "") for run in published_text["runs"])
+    hours_ago = parse_ago_text(published)
+    status = "live" if live else ("past" if hours_ago < 9999 else "unknown")
+    return {
+        "id": video_id,
+        "title": html.unescape(title),
+        "url": f"https://www.youtube.com/watch?v={video_id}",
+        "source": source,
+        "status": status,
+        "is_live": live,
+        "viewers": 0,
+        "viewers_text": "",
+        "schedule_text": "",
+        "streamed_text": published,
+        "hours_ago": hours_ago,
+    }
 
 
-def find_streams(data, keywords, channel_name, recent_hours=24):
-    streams = []
-    try:
-        contents = data.get("contents") or data.get("response", {}).get("contents")
-        if not contents:
-            return streams
+def _search_page_items(data):
+    items = []
+    contents = (
+        (data.get("contents") or {})
+        .get("twoColumnSearchResultsRenderer", {})
+        .get("primaryContents", {})
+        .get("sectionListRenderer", {})
+        .get("contents", [])
+    )
+    for section in contents:
+        for item in (section.get("itemSectionRenderer") or {}).get("contents", []) or []:
+            video = item.get("videoRenderer")
+            if not video:
+                continue
+            parsed = parse_search_video(video)
+            if parsed:
+                items.append(parsed)
+    return items
 
-        browse = contents.get("twoColumnBrowseResultsRenderer", {})
-        tabs = browse.get("tabs", [])
 
-        for tab in tabs:
-            content = tab.get("tabRenderer", {}).get("content", {})
-            grid = content.get("richGridRenderer", {})
-            sections = grid.get("contents", []) or content.get("sectionListRenderer", {}).get(
-                "contents", []
-            )
+def search_live(query, timeout=15, include_recent=True, recent_hours=24):
+    """YouTube-wide live search, used only for the explicit search path.
 
-            for section in sections:
-                videos = []
+    Live results win. When nothing is live, recent replays are returned only
+    when include_recent is set, and they keep status "past" so nothing claims
+    to be live.
+    """
+    url = (
+        "https://www.youtube.com/results?search_query="
+        + urllib.parse.quote(query + " live")
+        + "&sp=EgJAAQ%253D%253D"
+    )
+    html_content = fetch_url(url, timeout=timeout)
+    if not html_content or html_content.startswith(("Error", "HTTP")):
+        return []
+    data = extract_yt_initial_data(html_content)
+    if not data:
+        return []
 
-                if "richItemRenderer" in section:
-                    item = section["richItemRenderer"].get("content", {})
-                    v = item.get("videoRenderer")
-                    if v:
-                        videos.append(v)
+    candidates = [i for i in _search_page_items(data) if phrase_in_title(query, i["title"])]
+    live = sorted(
+        [i for i in candidates if i["status"] == "live"],
+        key=lambda i: (-i.get("viewers", 0), i["title"]),
+    )
+    if live:
+        chosen = live
+    elif include_recent:
+        chosen = sorted(
+            [
+                i
+                for i in candidates
+                if i["status"] == "past" and i["hours_ago"] <= recent_hours
+            ],
+            key=lambda i: i["hours_ago"],
+        )
+    else:
+        chosen = []
 
-                elif "shelfRenderer" in section:
-                    shelf_content = section["shelfRenderer"].get("content", {})
-                    if "horizontalListRenderer" in shelf_content:
-                        for item in shelf_content["horizontalListRenderer"].get("items", []):
-                            v = item.get("gridVideoRenderer")
-                            if v:
-                                videos.append(v)
-                    elif "expandedShelfContentsRenderer" in shelf_content:
-                        for item in shelf_content["expandedShelfContentsRenderer"].get("items", []):
-                            v = item.get("videoRenderer")
-                            if v:
-                                videos.append(v)
-
-                elif "itemSectionRenderer" in section:
-                    for item in section["itemSectionRenderer"].get("contents", []):
-                        v = item.get("videoRenderer") or item.get("gridVideoRenderer")
-                        if v:
-                            videos.append(v)
-
-                for v in videos:
-                    info = parse_video_renderer(v, keywords, channel_name, recent_hours)
-                    if info:
-                        streams.append(info)
-
-    except Exception:
-        pass
-
-    streams.sort(key=lambda x: (not x["is_live"], x.get("hours_ago", 9999)))
-    return streams
+    seen = set()
+    result = []
+    for item in chosen:
+        if item["id"] in seen:
+            continue
+        seen.add(item["id"])
+        result.append(item)
+    return result
 
 
 def search_youtube(query, keywords, channel_id=None, timeout=15, recent_hours=24):
-    streams = []
+    """Legacy signature kept until the news call sites are rewired.
 
-    # Channel streams page
-    if channel_id:
-        if channel_id.startswith("@") or not channel_id.startswith("UC"):
-            handle = channel_id if channel_id.startswith("@") else f"@{channel_id}"
-            channel_url = f"https://www.youtube.com/{handle}/streams"
-        else:
-            channel_url = f"https://www.youtube.com/channel/{channel_id}/streams"
-
-        html_content = fetch_url(channel_url, timeout=timeout)
-        if not html_content.startswith(("Error", "HTTP")):
-            data = extract_yt_initial_data(html_content)
-            if data:
-                streams.extend(find_streams(data, keywords, query, recent_hours))
-
-    # YouTube search (live filter)
-    search_url = f"https://www.youtube.com/results?search_query={urllib.parse.quote(query + ' live')}&sp=EgJAAQ%253D%253D"
-    html_content = fetch_url(search_url, timeout=timeout)
-    if not html_content.startswith(("Error", "HTTP")):
-        data = extract_yt_initial_data(html_content)
-        if data:
-            try:
-                contents = (
-                    data.get("contents", {})
-                    .get("twoColumnSearchResultsRenderer", {})
-                    .get("primaryContents", {})
-                    .get("sectionListRenderer", {})
-                    .get("contents", [])
-                )
-                for section in contents:
-                    if "itemSectionRenderer" in section:
-                        for item in section["itemSectionRenderer"].get("contents", []):
-                            v = item.get("videoRenderer")
-                            if v:
-                                info = parse_video_renderer(
-                                    v, keywords, "YouTube Search", recent_hours
-                                )
-                                if info:
-                                    streams.append(info)
-            except Exception:
-                pass
-
-    # Deduplicate by video ID, live first
-    seen, unique = set(), []
-    for s in streams:
-        if s["id"] not in seen:
-            seen.add(s["id"])
-            unique.append(s)
-    unique.sort(key=lambda x: (not x["is_live"], x.get("hours_ago", 9999)))
-    return unique
+    channel_id and keywords are ignored on purpose: channel sources now go
+    through channel_lives(), which never searches YouTube-wide.
+    """
+    return search_live(
+        query, timeout=timeout, include_recent=True, recent_hours=recent_hours
+    )
 
 
 # ─── PLAYBACK ─────────────────────────────────────────────────────────────────
