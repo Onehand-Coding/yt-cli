@@ -23,6 +23,7 @@ import sys
 import tempfile
 import threading
 import time
+import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -67,6 +68,34 @@ def c(color, text):
 
 def strip_ansi(text):
     return re.sub(r"\x1b\[[0-9;]*m", "", text)
+
+
+def display_width(text):
+    """Terminal columns for text, counting wide and combining characters."""
+    width = 0
+    for char in strip_ansi(text):
+        if unicodedata.combining(char):
+            continue
+        width += 2 if unicodedata.east_asian_width(char) in ("W", "F") else 1
+    return width
+
+
+def truncate_display(text, limit):
+    if display_width(text) <= limit:
+        return text
+    out = []
+    used = 0
+    for char in text:
+        char_width = (
+            0
+            if unicodedata.combining(char)
+            else (2 if unicodedata.east_asian_width(char) in ("W", "F") else 1)
+        )
+        if used + char_width > limit - 1:
+            break
+        out.append(char)
+        used += char_width
+    return "".join(out) + "…"
 
 
 class SearchError(Exception):
@@ -404,9 +433,10 @@ def fzf_pick(items, prompt="❯ ", header=None, height="50%", capture_query=Fals
     return stdout.strip() if p.returncode == 0 else None
 
 
-def _num_line(i, text):
+def _num_line(i, text, width=1):
     # Numbers stay because they are quick-select shortcuts; dim keeps rows calm.
-    return f"{c(C.DIM, str(i) + '.')}  {text}"
+    # Width is fixed per list so double-digit rows do not shift the text right.
+    return f"{c(C.DIM, f'{i:>{width}}.')}  {text}"
 
 
 def _parse_index(chosen):
@@ -418,11 +448,13 @@ def _parse_index(chosen):
 
 class FzfUI:
     def pick(self, items, prompt, header, height):
-        lines = [_num_line(i + 1, it) for i, it in enumerate(items)]
+        width = max(1, len(str(len(items))))
+        lines = [_num_line(i + 1, it, width) for i, it in enumerate(items)]
         return _parse_index(fzf_pick(lines, prompt=prompt, header=header, height=height))
 
     def pick_query(self, items, prompt, header, height):
-        lines = [_num_line(i + 1, it) for i, it in enumerate(items)]
+        width = max(1, len(str(len(items))))
+        lines = [_num_line(i + 1, it, width) for i, it in enumerate(items)]
         query, chosen, _ = fzf_pick(
             lines, prompt=prompt, header=header, height=height, capture_query=True
         )  # type: ignore[misc]
@@ -3246,10 +3278,10 @@ def format_saved_row(item, now_playing=None):
         mark = "○"
     elif now_playing and item["name"] == now_playing:
         mark = "▶"
-    name = item["name"]
-    name = name[:31] + "…" if len(name) > 32 else name
+    name = truncate_display(item["name"], 32)
+    name_cell = name + " " * max(0, 32 - display_width(name))
     tag = f"[{item['kind']}]"
-    return f"{mark}  {name:<32}  {c(C.DIM, tag)}"
+    return f"{mark}  {name_cell}  {c(C.DIM, tag)}"
 
 
 def pick_saved(items, ui, kind=None):
@@ -3519,7 +3551,7 @@ def parse_ago_text(text):
 
 
 def _parse_count(text):
-    """"1.2K" -> 1200, "8.6" -> 8, "" -> 0."""
+    """ "1.2K" -> 1200, "8.6" -> 8, "" -> 0."""
     match = re.match(r"([\d.,]+)\s*([KMB]?)", (text or "").strip(), re.I)
     if not match:
         return 0
@@ -3960,11 +3992,7 @@ def search_live(query, timeout=15, include_recent=True, recent_hours=24):
         chosen = live
     elif include_recent:
         chosen = sorted(
-            [
-                i
-                for i in candidates
-                if i["status"] == "past" and i["hours_ago"] <= recent_hours
-            ],
+            [i for i in candidates if i["status"] == "past" and i["hours_ago"] <= recent_hours],
             key=lambda i: i["hours_ago"],
         )
     else:
@@ -4249,14 +4277,16 @@ def manage_sources_screen(cfg, ui):
                     f"{item['status']:<14} {item['name']} -> "
                     f"{item.get('channel_title') or item.get('channel_id') or '-'}{dup}"
                 )
-            fixable = any(
-                item["status"] in ("dead", "missing-id") for item in report
-            )
+            fixable = any(item["status"] in ("dead", "missing-id") for item in report)
             ui.info(lines, wait=False)
-            if fixable and ui.action(
-                ["Apply safe fixes? (exact-name ids, confirmed dead)", "─" * 44],
-                [("yes, apply", "yes"), ("no, report only", "no")],
-            ) == "yes":
+            if (
+                fixable
+                and ui.action(
+                    ["Apply safe fixes? (exact-name ids, confirmed dead)", "─" * 44],
+                    [("yes, apply", "yes"), ("no, report only", "no")],
+                )
+                == "yes"
+            ):
                 counts = apply_channel_fixes(cfg, report)
                 ui.info(
                     [
@@ -4464,9 +4494,7 @@ def run_news_mode(cfg, ui, stop, goodbye, on_esc="quit", initial_source=None):
                         settings["recent_hours"],
                     )
                 elif not channel_id:
-                    raise ChannelError(
-                        "needs repair: run --news --verify, then rebind this source"
-                    )
+                    raise ChannelError("needs repair: run --news --verify, then rebind this source")
                 else:
                     cached_streams = channel_lives(channel_id, settings["timeout"])
                     cached_streams = [
@@ -4945,8 +4973,7 @@ def _news_cli_main():
     items = [
         item
         for item in items
-        if item.get("status") != "past"
-        or item.get("hours_ago", 9999) <= settings["recent_hours"]
+        if item.get("status") != "past" or item.get("hours_ago", 9999) <= settings["recent_hours"]
     ]
     live = [i for i in items if i.get("status") == "live"]
     upcoming = [i for i in items if i.get("status") == "upcoming"]

@@ -20,11 +20,7 @@ def cfg_files(tmp_path, monkeypatch):
 
 def test_saved_items_maps_all_three_kinds(cfg_files):
     cfg = {
-        "radio": {
-            "presets": [
-                {"slug": "jazz", "name": "Jazz", "url": "u1", "category": "Chill"}
-            ]
-        },
+        "radio": {"presets": [{"slug": "jazz", "name": "Jazz", "url": "u1", "category": "Chill"}]},
         "stations": [{"slug": "star", "name": "Star FM", "url": "u2", "countrycode": "PH"}],
         "news": {"sources": [{"id": "news5", "name": "News5Everywhere", "channel_id": "UCx"}]},
     }
@@ -46,9 +42,7 @@ def test_saved_items_includes_disabled_but_marks_them(cfg_files):
 
 
 def test_format_saved_row_marks_disabled_and_kind():
-    row = yt_cli.format_saved_row(
-        {"kind": "channel", "name": "News5", "enabled": False}, None
-    )
+    row = yt_cli.format_saved_row({"kind": "channel", "name": "News5", "enabled": False}, None)
     assert "○" in row
     assert "[channel]" in row
     live = yt_cli.format_saved_row({"kind": "channel", "name": "News5", "enabled": True}, None)
@@ -137,3 +131,31 @@ def test_add_to_history_keeps_kind(cfg_files):
     entry = json.loads(yt_cli.HISTORY_PATH.read_text())[0]
     assert entry["kind"] == "channel"
     assert entry["channel_id"] == "UCx"
+
+
+def test_saved_rows_align_kind_tag_across_kinds_and_lengths():
+    rows = [
+        yt_cli.format_saved_row({"kind": "channel", "name": "News5", "enabled": True}),
+        yt_cli.format_saved_row(
+            {"kind": "preset", "name": "Avenged Sevenfold", "enabled": True}
+        ),
+        yt_cli.format_saved_row({"kind": "station", "name": "ニュース", "enabled": True}),
+    ]
+
+    def tag_column(line):
+        plain = yt_cli.strip_ansi(line)
+        return yt_cli.display_width(plain[: plain.index("[")])
+
+    assert len({tag_column(row) for row in rows}) == 1
+
+
+def test_number_gutter_does_not_shift_double_digit_rows():
+    row = yt_cli.format_saved_row({"kind": "preset", "name": "Jazz", "enabled": True})
+
+    def tag_column(line):
+        plain = yt_cli.strip_ansi(line)
+        return yt_cli.display_width(plain[: plain.index("[")])
+
+    one = yt_cli._num_line(1, row, 2)
+    ten = yt_cli._num_line(10, row, 2)
+    assert tag_column(one) == tag_column(ten)
