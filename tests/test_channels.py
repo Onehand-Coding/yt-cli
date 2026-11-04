@@ -148,3 +148,29 @@ def test_search_live_prefers_live_and_skips_recent_when_live_exists(monkeypatch)
     monkeypatch.setattr(yt_cli, "extract_yt_initial_data", lambda html: data)
     items = yt_cli.search_live("TV Patrol", include_recent=True)
     assert [i["id"] for i in items] == ["livelive001"]
+
+
+def test_stream_row_labels_live_upcoming_past():
+    live = {"title": "Ted Failon", "status": "live", "viewers_text": "1.2K watching"}
+    upcoming = {"title": "World Tonight", "status": "upcoming", "schedule_text": "7:00 AM"}
+    past = {"title": "TV Patrol", "status": "past", "streamed_text": "34 min ago"}
+    assert "LIVE" in yt_cli.format_stream_row(live)
+    assert "1.2K watching" in yt_cli.format_stream_row(live)
+    assert "7:00 AM" in yt_cli.format_stream_row(upcoming)
+    assert "34 min ago" in yt_cli.format_stream_row(past)
+    assert "LIVE" not in yt_cli.format_stream_row(past)
+
+
+def test_stream_badge_never_claims_live_for_past():
+    assert "LIVE" in yt_cli.render_stream_badge(
+        {"status": "live", "viewers_text": "1.2K watching"}
+    )
+    assert "LIVE" not in yt_cli.render_stream_badge(
+        {"status": "past", "streamed_text": "34 min ago"}
+    )
+
+
+def test_upcoming_items_are_not_playable():
+    assert yt_cli.stream_is_playable({"status": "upcoming"}) is False
+    assert yt_cli.stream_is_playable({"status": "live"}) is True
+    assert yt_cli.stream_is_playable({"status": "past"}) is True

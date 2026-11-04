@@ -3067,6 +3067,7 @@ def load_news_cfg(cfg):
         sources[s["id"]] = {
             "name": s.get("name", s["id"]),
             "channel_id": s.get("channel_id"),
+            "channel_name": s.get("channel_name", ""),
             "keywords": s.get("keywords", [s["id"]]),
             "fallback_url": s.get("fallback_url", ""),
             "enabled": True,
@@ -3334,6 +3335,9 @@ def sort_stream_items(items):
 
 
 def channel_streams_url(channel_id):
+    # channel ids come from config, but keep URL construction strict anyway
+    if not re.fullmatch(r"[A-Za-z0-9_-]{2,64}", channel_id or ""):
+        raise ChannelError("invalid channel id")
     return f"https://www.youtube.com/channel/{channel_id}/streams"
 
 
@@ -3617,17 +3621,34 @@ def launch_news_player(url, player, quality="720", direct_url=None):
 # ─── NEWS MODE ─────────────────────────────────────────────────────────────────
 
 
+def stream_is_playable(stream):
+    return stream.get("status") != "upcoming"
+
+
 def render_stream_badge(stream):
-    if stream["is_live"]:
+    status = stream.get("status")
+    if status is None:
+        # Legacy callers passed is_live only.
+        status = "live" if stream.get("is_live") else "past"
+    if status == "live":
         return C.LIVE
-    hrs = stream.get("hours_ago", 9999)
-    if hrs < 1:
-        label = "just now"
-    elif hrs < 2:
-        label = "1 hr ago"
+    if status == "upcoming":
+        return c(C.YELLOW, "⏰")
+    if status == "past":
+        return C.RECENT
+    return c(C.DIM, "·")
+
+
+def format_stream_row(stream):
+    status = stream.get("status")
+    if status == "live":
+        meta = stream.get("viewers_text") or ""
+    elif status == "upcoming":
+        meta = stream.get("schedule_text") or ""
     else:
-        label = f"{int(hrs)} hrs ago"
-    return f"{C.RECENT} {c(C.YELLOW, label)}"
+        meta = stream.get("streamed_text") or ""
+    tail = f"  {c(C.DIM, meta)}" if meta else ""
+    return f"{render_stream_badge(stream)}  {stream['title']}{tail}"
 
 
 def render_header(subtitle="", now_playing=None):
@@ -3676,15 +3697,19 @@ def pick_stream(streams, source_name, ui):
         if action == "r":
             return "retry"
         return None
-    lines = []
-    for stream in streams:
-        badge = render_stream_badge(stream)
-        views = f"  {c(C.DIM, '👥 ' + stream['view_count'])}" if stream["view_count"] else ""
-        lines.append(f"{badge}  {stream['title']}{views}")
+    lines = [format_stream_row(stream) for stream in streams]
+    live_count = sum(1 for stream in streams if stream.get("status") == "live")
+    upcoming_count = sum(1 for stream in streams if stream.get("status") == "upcoming")
+    if live_count:
+        summary = f"{live_count} live, {upcoming_count} upcoming"
+    elif upcoming_count:
+        summary = f"no live right now · {upcoming_count} upcoming"
+    else:
+        summary = "no live right now · replays below"
     idx = ui.pick(
         lines,
         "stream ❯ ",
-        f"{source_name} · {len(streams)} stream(s) found\n{'─' * 40}\nEsc → back",
+        f"{source_name} · {summary}\n{'─' * 40}\nEsc → back",
         "60%",
     )
     if idx is None:
@@ -3753,8 +3778,10 @@ def manage_sources_screen(cfg, ui):
     return load_news_cfg(load_config())[1]
 
 
-def run_news_mode(cfg, ui, stop, goodbye, on_esc="quit"):
+def run_news_mode(cfg, ui, stop, goodbye, on_esc="quit", initial_source=None):
     settings, sources = load_news_cfg(cfg)
+    single_source = bool(initial_source)
+    first_pass = True
     current_stream: list = [None]
     player = [settings["player"]]
 
@@ -3764,9 +3791,14 @@ def run_news_mode(cfg, ui, stop, goodbye, on_esc="quit"):
             p = detect_player()
         return p
 
-    def play_news(stream):
+    def play_news(stream, source_info=None):
         stop()
-        NOW_PLAYING[0] = {"title": stream["title"], "replay": lambda: play_news(stream)}
+        kind = "channel" if (source_info or {}).get("channel_id") else "video"
+        NOW_PLAYING[0] = {
+            "title": stream["title"],
+            "kind": kind,
+            "replay": lambda: play_news(stream, source_info),
+        }
         clear_screen()
         pl = resolve_player()
         direct_url = None
@@ -3788,12 +3820,25 @@ def run_news_mode(cfg, ui, stop, goodbye, on_esc="quit"):
         IPC_DONE[0] = done
         threading.Thread(target=_ipc_watch, args=(stream["title"], done), daemon=True).start()
         add_to_history(
-            {"title": stream["title"], "url": stream["url"], "uploader": stream["source"]},
+            {
+                "title": stream["title"],
+                "url": stream["url"],
+                "uploader": stream["source"],
+                "kind": kind,
+                "channel_id": (source_info or {}).get("channel_id", ""),
+            },
             cfg["history_size"],
         )
 
     while True:
-        result = pick_source(sources, ui)
+        if first_pass and initial_source:
+            first_pass = False
+            if initial_source not in sources:
+                ui.info([f"❌ Unknown source: {initial_source}"])
+                return
+            result = (initial_source, sources[initial_source])
+        else:
+            result = pick_source(sources, ui)
 
         if result is None:
             if on_esc == "home":
@@ -3880,23 +3925,46 @@ def run_news_mode(cfg, ui, stop, goodbye, on_esc="quit"):
             is_search_result = False
 
         while True:
+            go_back_to_main = False
             clear_screen()
             sp = Spinner("Scanning for live streams...")
             sp.start()
-            cached_streams = search_youtube(
-                source_info["name"],
-                source_info["keywords"],
-                source_info.get("channel_id"),
-                settings["timeout"],
-                settings["recent_hours"],
-            )
+            channel_id = source_info.get("channel_id") or ""
+            try:
+                if is_search_result:
+                    cached_streams = search_live(
+                        source_info["name"],
+                        settings["timeout"],
+                        True,
+                        settings["recent_hours"],
+                    )
+                elif not channel_id:
+                    raise ChannelError(
+                        "needs repair: run --news --verify, then rebind this source"
+                    )
+                else:
+                    cached_streams = channel_lives(channel_id, settings["timeout"])
+                    cached_streams = [
+                        item
+                        for item in cached_streams
+                        if item.get("status") != "past"
+                        or item.get("hours_ago", 9999) <= settings["recent_hours"]
+                    ]
+            except ChannelError as exc:
+                sp.fail(str(exc))
+                action = ui.action(
+                    [f"⚠  {source_info.get('name', 'source')}: {exc}", "─" * 44],
+                    [("retry", "r"), ("back", "b")],
+                )
+                if action == "r":
+                    continue
+                go_back_to_main = True
+                break
             if cached_streams:
                 sp.done(f"Found {len(cached_streams)} stream(s)")
             else:
                 sp.fail("No streams found")
             print()
-
-            go_back_to_main = False
 
             while True:
                 result = pick_stream(cached_streams, source_info["name"], ui)
@@ -3909,20 +3977,32 @@ def run_news_mode(cfg, ui, stop, goodbye, on_esc="quit"):
                     continue
 
                 chosen = result
+                if not stream_is_playable(chosen):
+                    ui.info(
+                        [
+                            f"⏰  {chosen['title']}",
+                            chosen.get("schedule_text") or "not started yet",
+                            channel_streams_url(channel_id) if channel_id else "",
+                            "Not playing: this stream has not started.",
+                        ],
+                        wait=False,
+                    )
+                    time.sleep(0.8)
+                    continue
                 pl = resolve_player()
                 if not pl:
                     ui.info(["❌ No player found (mpv / vlc / ffplay)."])
                     go_back_to_main = True
                     break
 
-                play_news(chosen)
+                play_news(chosen, source_info)
 
                 go_to_main_from_playing = False
                 refetch_from_playing = False
 
                 while True:
                     stream = current_stream[0]
-                    status = C.LIVE if stream["is_live"] else render_stream_badge(stream)
+                    status = render_stream_badge(stream)
                     header_lines = [
                         f"▶  {c(C.BOLD, stream['title'])}",
                         f"   {c(C.DIM, 'Source')}  : {stream['source']}",
@@ -3934,12 +4014,7 @@ def run_news_mode(cfg, ui, stop, goodbye, on_esc="quit"):
                         header_lines.append(
                             f"   {c(C.YELLOW, '⚠  Player exited: stream may have ended.')}"
                         )
-                    actions = (
-                        PLAY_ACTIONS_NEWS
-                        if is_search_result
-                        else [a for a in PLAY_ACTIONS_NEWS if a[1] != "k"]
-                    )
-                    action = ui.action(header_lines, actions)
+                    action = ui.action(header_lines, PLAY_ACTIONS_NEWS)
 
                     if action == "o":
                         break  # stream list, player keeps playing
@@ -3969,7 +4044,10 @@ def run_news_mode(cfg, ui, stop, goodbye, on_esc="quit"):
                                 "title": stream["title"],
                                 "url": stream["url"],
                                 "uploader": stream.get("source"),
+                                "kind": "channel" if source_info.get("channel_id") else "video",
                                 "channel_id": source_info.get("channel_id"),
+                                "channel_name": source_info.get("channel_name")
+                                or source_info.get("name"),
                                 "keywords": source_info.get("keywords"),
                                 "fallback_url": source_info.get("fallback_url"),
                             },
@@ -4001,6 +4079,8 @@ def run_news_mode(cfg, ui, stop, goodbye, on_esc="quit"):
                     break
 
             if go_back_to_main:
+                if single_source:
+                    return
                 break
 
 
