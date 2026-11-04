@@ -69,11 +69,12 @@ directly at the wrapper file — still correct. E2E harness: `tests/e2e/`. Proje
   `play_fn`. (Bug found by E2E — `KeyError: 'name'`.)
 - **Action-menu labels must have unique filter keys per key letter.** fzf
   ranks matches by position/length, so a key like `p` that appears in multiple
-  labels picks the WRONG action. NEWS menu: `"player"` (p) — renamed from
-  `"change player"` (which lost to `replay`). Radio/Search tables were audited
-  and are unambiguous. This bit AGAIN (2026-08-21): adding a `"save"` label
-  made typing `s` select it over `"search"` (shorter line wins) — new labels
-  must start with an UNUSED letter in every table (`"keep (save)"` uses k).
+  labels picks the WRONG action. NEWS menu: `"player"` is now `"change audio"`
+  (p was needed for pause). Radio/Search tables were audited and are
+  unambiguous. This bit AGAIN (2026-08-21): adding a `"save"` label made typing
+  `s` select it over `"search"` (shorter line wins). The label is now `save`
+  again, so `s` is ambiguous wherever `search` or `stop` is present; type `save` in full
+  to select save. New labels should still use an unused first letter.
 - Header-string bug fixed at 5 sites: `"Manage presets\n─" * 44` etc. repeated
   the whole title 44 times — now `"Title\n" + "─" * 44`. The SAME implicit
   string-concat gotcha hit the pick_preset and pick_source headers: a line
@@ -134,17 +135,16 @@ yt-cli2 work, still valid for any fzf-flow testing:
 ## Save + navigation keys (2026-08-21)
 
 Spec: `docs/specs/2026-08-21-yt-cli-save-navigation-design.md`.
-All playing action menus gained `k` = keep/save (never stops playback) and
-`g` = go-to-mode picker (Radio/News/Search/Home; player keeps playing; jumps
-unwind via a `GoTo` exception caught only in `_run_mode_loop`, shared by
-`run_fzf` AND `_curses_main`). The old post-stop "save?" prompts were
-REMOVED. Saving a news stream auto-captures channel_id via `resolve_url_meta`
-(one yt-dlp dump; fallback: keyword-only source) with
-fallback_url=channel /streams — saved sources equal migrated ones. URLs
-pasted into any query box (`looks_like_url`) open `url_entry_flow`:
-play, save as preset, save as news channel, cancel (radio's preset box
-auto-plays URLs as before, now savable, and `www.` / `youtu.be` links are
-detected). E2E: `flow_e.py` covers it; flows a to f pass.
+All playing action menus have a `save` action (never stops playback) and
+`g` = go-to picker (Saved/Presets/Radio/News/Search/Home; the player keeps
+playing; jumps unwind via a `GoTo` exception caught only in
+`_run_mode_loop`, shared by `run_fzf` AND `_curses_main`). The old post-stop
+"save?" prompts were removed. Saving a channel live stores the channel id and
+its resolved title; URL entry can save a preset or a channel. URLs pasted
+into any query box (`looks_like_url`) open `url_entry_flow`: play, save as
+preset, save as channel, cancel (radio's preset box auto-plays URLs as before,
+now savable, and `www.` / `youtu.be` links are detected). E2E: `flow_e.py`
+covers it; flows a to f pass.
 
 ## Config vs state split (2026-08-21)
 
@@ -155,8 +155,9 @@ just when presets/sources change. `load_state()` seeds from legacy config
 values once; `migrate_configs()` then strips those keys from config.json.
 Toggle handlers (`v`/`l` in radio, `p` in news) write state.json — never
 config.json. Rationale: every casual keypress used to dirty the dotfiles
-repo. New action-menu labels must start with a letter unused in that table
-(see gotcha above — `"save"` broke `s`→search; it's `"keep (save)"` on k).
+repo. New action-menu labels should still use a first letter unused in that
+table. The save action is an exception: its label is `save`, so `s` is
+ambiguous where `search` or `stop` exists; type `save` in full to select it.
 
 ## Resolve cache / instant replays (2026-08-22)
 

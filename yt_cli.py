@@ -1190,7 +1190,7 @@ PLAY_ACTIONS_SEARCH = [
     ("stop", "q"),
     ("exit", "x"),
     ("toggle video", "v"),
-    ("keep (save)", "k"),
+    ("save", "k"),
     ("detach", "d"),
 ]
 
@@ -1205,7 +1205,7 @@ PLAY_ACTIONS_RADIO = [
     ("toggle video", "v"),
     ("toggle loop", "l"),
     ("manage presets", "m"),
-    ("keep (save)", "k"),
+    ("save", "k"),
     ("detach", "d"),
 ]
 
@@ -1219,7 +1219,7 @@ PLAY_ACTIONS_NEWS = [
     ("exit", "x"),
     ("change audio", "p"),
     ("refresh streams", "f"),
-    ("keep (save)", "k"),
+    ("save", "k"),
     ("detach", "d"),
 ]
 
@@ -3062,7 +3062,7 @@ PLAY_ACTIONS_STATION = [
     ("go to…", "g"),
     ("stop", "q"),
     ("exit", "x"),
-    ("keep (save)", "k"),
+    ("save", "k"),
     ("detach", "d"),
 ]
 

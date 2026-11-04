@@ -217,3 +217,16 @@ def test_playing_tables_expose_stop_detach_exit():
         assert "exit" in labels
         assert "stop player" not in labels
         assert "detach & exit" not in labels
+
+
+def test_playing_tables_expose_save_label():
+    tables = [
+        yt_cli.PLAY_ACTIONS_SEARCH,
+        yt_cli.PLAY_ACTIONS_RADIO,
+        yt_cli.PLAY_ACTIONS_NEWS,
+        yt_cli.PLAY_ACTIONS_STATION,
+    ]
+    for table in tables:
+        labels = [label for label, _ in table]
+        assert "save" in labels
+        assert "keep (save)" not in labels

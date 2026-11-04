@@ -30,7 +30,7 @@ keywords and a global search, which is why they drift.
   stored as a URL.
 - The same list of saved things is reachable from one screen, grouped by kind:
   Channels (live), Stations (internet radio), Presets (YouTube music/radio).
-- `k` (keep) always saves the durable thing. On a channel live it saves the
+- The save action always saves the durable thing. On a channel live it saves the
   channel, not the video.
 - Saved channels can be verified and repaired in one pass.
 

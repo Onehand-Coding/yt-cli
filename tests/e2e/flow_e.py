@@ -65,7 +65,7 @@ def main():
         time.sleep(1.0)
         mpv_pid = subprocess.run(["pgrep", "-x", "mpv"],
                                  capture_output=True, text=True).stdout.split()
-        h.send("k\r", 0.4)
+        h.send("save\r", 0.4)
         ok2 &= h.wait_new('Save "', 10)
         time.sleep(1.5)
         ok2 &= h.wait_for("save as preset", 10)
