@@ -174,3 +174,21 @@ def test_upcoming_items_are_not_playable():
     assert yt_cli.stream_is_playable({"status": "upcoming"}) is False
     assert yt_cli.stream_is_playable({"status": "live"}) is True
     assert yt_cli.stream_is_playable({"status": "past"}) is True
+
+
+def test_choose_cli_stream_returns_live_only_by_default():
+    items = [
+        {"title": "Old", "status": "past"},
+        {"title": "Now", "status": "live"},
+    ]
+    chosen = yt_cli.choose_cli_stream(items, allow_replay=False)
+    assert chosen is not None
+    assert chosen["title"] == "Now"
+
+
+def test_choose_cli_stream_refuses_when_no_live():
+    items = [{"title": "Old", "status": "past"}]
+    assert yt_cli.choose_cli_stream(items, allow_replay=False) is None
+    replay = yt_cli.choose_cli_stream(items, allow_replay=True)
+    assert replay is not None
+    assert replay["title"] == "Old"

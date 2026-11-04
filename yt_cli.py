@@ -1508,7 +1508,7 @@ def prefetch_resolve(url, quality):
                 text=True,
                 timeout=90,
             )
-            lines = [l.strip() for l in result.stdout.splitlines() if l.strip()]
+            lines = [line.strip() for line in result.stdout.splitlines() if line.strip()]
             if result.returncode != 0 or not lines:
                 return
             video_url, audio_url = lines[0], (lines[1] if len(lines) > 1 else None)
@@ -3341,6 +3341,18 @@ def channel_streams_url(channel_id):
     return f"https://www.youtube.com/channel/{channel_id}/streams"
 
 
+def choose_cli_stream(items, allow_replay=False):
+    """CLI choice: top live, else newest replay only when explicitly allowed."""
+    live = [item for item in items if item.get("status") == "live"]
+    if live:
+        return live[0]
+    if not allow_replay:
+        return None
+    past = [item for item in items if item.get("status") == "past"]
+    past.sort(key=lambda item: item.get("hours_ago", 9999))
+    return past[0] if past else None
+
+
 def channel_lives(channel_id, timeout=15):
     """The channel's own live/upcoming/replay list. Raises ChannelError.
 
@@ -3431,18 +3443,29 @@ def parse_search_video(video):
 
 
 def _search_page_items(data):
+    """Collect videoRenderer entries from any search-results page layout."""
+    sections = []
+
+    def walk(obj):
+        if isinstance(obj, dict):
+            section = obj.get("itemSectionRenderer")
+            if isinstance(section, dict):
+                sections.append(section)
+                return
+            for value in obj.values():
+                walk(value)
+        elif isinstance(obj, list):
+            for value in obj:
+                walk(value)
+
+    walk(data)
     items = []
-    contents = (
-        (data.get("contents") or {})
-        .get("twoColumnSearchResultsRenderer", {})
-        .get("primaryContents", {})
-        .get("sectionListRenderer", {})
-        .get("contents", [])
-    )
-    for section in contents:
-        for item in (section.get("itemSectionRenderer") or {}).get("contents", []) or []:
+    for section in sections:
+        for item in section.get("contents") or []:
+            if not isinstance(item, dict):
+                continue
             video = item.get("videoRenderer")
-            if not video:
+            if not isinstance(video, dict):
                 continue
             parsed = parse_search_video(video)
             if parsed:
@@ -3496,20 +3519,6 @@ def search_live(query, timeout=15, include_recent=True, recent_hours=24):
         seen.add(item["id"])
         result.append(item)
     return result
-
-
-def search_youtube(query, keywords, channel_id=None, timeout=15, recent_hours=24):
-    """Legacy signature kept until the news call sites are rewired.
-
-    channel_id and keywords are ignored on purpose: channel sources now go
-    through channel_lives(), which never searches YouTube-wide.
-    """
-    return search_live(
-        query, timeout=timeout, include_recent=True, recent_hours=recent_hours
-    )
-
-
-# ─── PLAYBACK ─────────────────────────────────────────────────────────────────
 
 
 def get_direct_stream_url(youtube_url, quality="720"):
@@ -4124,7 +4133,7 @@ CONFIG: {CONFIG_PATH}
 USAGE:
     yt-cli                         Main menu
     yt-cli --news / -n            Interactive TUI mode (news)
-    yt-cli --news <source> [player]  Play directly (CLI mode)
+    yt-cli --news <source> [player] [--replay]  Play the channel's live
     yt-cli --news --list
     yt-cli --news --config
     yt-cli --news --help
@@ -4136,9 +4145,14 @@ SUPPORTED SOURCES:""")
 PLAYERS:
     auto  mpv  vlc  ffplay
 
+CHANNEL BEHAVIOR:
+    A source is a YouTube channel. It plays that channel's current live.
+    If nothing is live, it lists live/upcoming/replays and plays nothing
+    unless you pass --replay.
+
 EXAMPLES:
-    yt-cli --news
-    yt-cli --news tv-patrol
+    yt-cli --news news5everywhere
+    yt-cli --news news5everywhere --replay
     yt-cli --news 24-oras vlc
 """)
 
@@ -4339,9 +4353,12 @@ def _news_cli_main():
     source_query = args[0].lower()
     player_override = None
     quality = settings["quality"]
+    allow_replay = False
     for arg in args[1:]:
         if arg.startswith("--quality="):
             quality = arg.split("=")[1]
+        elif arg in ("--replay", "-R", "-replay"):
+            allow_replay = True
         elif arg in ("mpv", "vlc", "ffplay", "auto"):
             player_override = arg
 
@@ -4362,18 +4379,41 @@ def _news_cli_main():
             print("Did you mean: " + ", ".join(suggestions[:4]))
         sys.exit(1)
 
-    print(f"\n📺 Searching for: {matched['name']}")
-    streams = search_youtube(
-        matched["name"],
-        matched["keywords"],
-        matched.get("channel_id"),
-        settings["timeout"],
-        settings["recent_hours"],
-    )
-    if not streams:
-        print(f"⚠️  No streams found. Try: {matched['fallback_url']}")
+    channel_id = matched.get("channel_id") or ""
+    if not channel_id:
+        print(f"⚠️  {matched['name']} has no channel id.")
+        print("    Run: yt-cli --news --verify")
+        sys.exit(1)
+
+    print(f"\n📺 {matched['name']}")
+    try:
+        items = channel_lives(channel_id, settings["timeout"])
+    except ChannelError as exc:
+        print(f"❌ {exc}")
+        print(f"   {channel_streams_url(channel_id)}")
+        sys.exit(1)
+
+    items = [
+        item
+        for item in items
+        if item.get("status") != "past"
+        or item.get("hours_ago", 9999) <= settings["recent_hours"]
+    ]
+    live = [i for i in items if i.get("status") == "live"]
+    upcoming = [i for i in items if i.get("status") == "upcoming"]
+    past = [i for i in items if i.get("status") == "past"]
+    for item in live:
+        print(f"  ● LIVE  {(item.get('viewers_text') or ''):<16} {item['title']}")
+    for item in upcoming:
+        print(f"  ⏰       {(item.get('schedule_text') or ''):<16} {item['title']}")
+    for item in past[:5]:
+        print(f"  ↻        {(item.get('streamed_text') or ''):<16} {item['title']}")
+
+    stream = choose_cli_stream(items, allow_replay=allow_replay)
+    if not stream:
+        print("\n⚠️  No live stream right now. Use --replay to play the newest replay.")
         sys.exit(0)
-    stream = streams[0]
+
     direct_url = get_direct_stream_url(stream["url"], quality)
     player = player_override or settings["player"]
     play_stream_cli(stream["url"], player, quality, direct_url=direct_url)
