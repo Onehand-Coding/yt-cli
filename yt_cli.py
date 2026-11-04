@@ -23,6 +23,7 @@ import sys
 import tempfile
 import threading
 import time
+import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -67,6 +68,34 @@ def c(color, text):
 
 def strip_ansi(text):
     return re.sub(r"\x1b\[[0-9;]*m", "", text)
+
+
+def display_width(text):
+    """Terminal columns for text, counting wide and combining characters."""
+    width = 0
+    for char in strip_ansi(text):
+        if unicodedata.combining(char):
+            continue
+        width += 2 if unicodedata.east_asian_width(char) in ("W", "F") else 1
+    return width
+
+
+def truncate_display(text, limit):
+    if display_width(text) <= limit:
+        return text
+    out = []
+    used = 0
+    for char in text:
+        char_width = (
+            0
+            if unicodedata.combining(char)
+            else (2 if unicodedata.east_asian_width(char) in ("W", "F") else 1)
+        )
+        if used + char_width > limit - 1:
+            break
+        out.append(char)
+        used += char_width
+    return "".join(out) + "…"
 
 
 class SearchError(Exception):
@@ -162,6 +191,14 @@ def load_config():
         else:
             merged[k] = v
     return merged
+
+
+def refresh_config(cfg):
+    """Reload config.json into cfg so a save cannot drop another mode's changes."""
+    fresh = load_config()
+    cfg.clear()
+    cfg.update(fresh)
+    return cfg
 
 
 def save_config(cfg):
@@ -404,25 +441,29 @@ def fzf_pick(items, prompt="❯ ", header=None, height="50%", capture_query=Fals
     return stdout.strip() if p.returncode == 0 else None
 
 
-def _num_line(i, text):
+def _num_line(i, text, width=1):
     # Numbers stay because they are quick-select shortcuts; dim keeps rows calm.
-    return f"{c(C.DIM, str(i) + '.')}  {text}"
+    # Width is fixed per list so double-digit rows do not shift the text right.
+    return f"{c(C.DIM, f'{i:>{width}}.')}  {text}"
 
 
 def _parse_index(chosen):
     if chosen is None:
         return None
-    m = re.match(r"^\x1b\[[^m]*m(\d+)\.", chosen) or re.match(r"^(\d+)\.", chosen)
+    # The number gutter may be right-aligned inside the dim escape.
+    m = re.match(r"^\x1b\[[^m]*m\s*(\d+)\.", chosen) or re.match(r"^\s*(\d+)\.", chosen)
     return int(m.group(1)) - 1 if m else None
 
 
 class FzfUI:
     def pick(self, items, prompt, header, height):
-        lines = [_num_line(i + 1, it) for i, it in enumerate(items)]
+        width = max(1, len(str(len(items))))
+        lines = [_num_line(i + 1, it, width) for i, it in enumerate(items)]
         return _parse_index(fzf_pick(lines, prompt=prompt, header=header, height=height))
 
     def pick_query(self, items, prompt, header, height):
-        lines = [_num_line(i + 1, it) for i, it in enumerate(items)]
+        width = max(1, len(str(len(items))))
+        lines = [_num_line(i + 1, it, width) for i, it in enumerate(items)]
         query, chosen, _ = fzf_pick(
             lines, prompt=prompt, header=header, height=height, capture_query=True
         )  # type: ignore[misc]
@@ -726,7 +767,8 @@ def format_fzf_item(idx, item):
     when = ""
     if item.get("played_at"):
         when = f" · {item['played_at'][:16].replace('T', ' ')}"
-    return f"{title}  {c(C.DIM, f'[{dur}] {uploader}{when}')}"
+    kind_tag = " [channel]" if item.get("kind") == "channel" else ""
+    return f"{title}  {c(C.DIM, f'[{dur}] {uploader}{when}{kind_tag}')}"
 
 
 # ---------- player lifecycle ----------
@@ -1009,9 +1051,11 @@ def run_search_mode(
             ]
             if PLAYER_PROC[0] is not None and PLAYER_PROC[0].poll() is not None:
                 header_lines.append(f"   {c(C.YELLOW, '⚠  Player exited.')}")
-            action = ui.action(header_lines, PLAY_ACTIONS_SEARCH)
+            action = ui.action(header_lines, with_pause(PLAY_ACTIONS_SEARCH))
             if action == "r":
                 play(item)
+            elif action == "u":
+                toggle_pause()
             elif action == "o":
                 item = None
                 continue  # back to results picker, player keeps playing
@@ -1102,6 +1146,47 @@ def ipc_rpc(cmd, timeout=2):
         s.close()
 
 
+def player_paused():
+    """True/False when the shared player answers, None when unreachable."""
+    try:
+        return bool(ipc_rpc(["get_property", "pause"]))
+    except (OSError, ValueError, RuntimeError):
+        return None
+
+
+def toggle_pause():
+    try:
+        ipc_rpc(["cycle", "pause"])
+        return True
+    except (OSError, ValueError, RuntimeError):
+        return False
+
+
+def pause_action():
+    paused = player_paused()
+    if paused is None:
+        return None
+    return ("play" if paused else "pause", "u")
+
+
+def with_pause(actions, pausable=True):
+    """Insert a pause/play row before stop, only when it can work."""
+    if not pausable:
+        return actions
+    pause = pause_action()
+    if not pause:
+        return actions
+    out = []
+    for action in actions:
+        if action[1] == "q" and pause:
+            out.append(pause)
+            pause = None
+        out.append(action)
+    if pause:
+        out.append(pause)
+    return out
+
+
 # ---------- unified action tables ----------
 
 PLAY_ACTIONS_SEARCH = [
@@ -1110,11 +1195,11 @@ PLAY_ACTIONS_SEARCH = [
     ("history", "h"),
     ("replay video", "r"),
     ("go to…", "g"),
-    ("stop player", "q"),
+    ("stop", "q"),
     ("exit", "x"),
     ("toggle video", "v"),
-    ("keep (save)", "k"),
-    ("detach & exit", "d"),
+    ("save", "k"),
+    ("detach", "d"),
 ]
 
 PLAY_ACTIONS_RADIO = [
@@ -1123,13 +1208,13 @@ PLAY_ACTIONS_RADIO = [
     ("history", "h"),
     ("replay", "r"),
     ("go to…", "g"),
-    ("stop player", "q"),
+    ("stop", "q"),
     ("exit", "x"),
     ("toggle video", "v"),
     ("toggle loop", "l"),
     ("manage presets", "m"),
-    ("keep (save)", "k"),
-    ("detach & exit", "d"),
+    ("save", "k"),
+    ("detach", "d"),
 ]
 
 PLAY_ACTIONS_NEWS = [
@@ -1138,12 +1223,12 @@ PLAY_ACTIONS_NEWS = [
     ("history", "h"),
     ("replay", "r"),
     ("go to…", "g"),
-    ("stop player", "q"),
+    ("stop", "q"),
     ("exit", "x"),
-    ("player", "p"),
+    ("change audio", "p"),
     ("refresh streams", "f"),
-    ("keep (save)", "k"),
-    ("detach & exit", "d"),
+    ("save", "k"),
+    ("detach", "d"),
 ]
 
 
@@ -1200,6 +1285,7 @@ def _search_play_default(cfg):
         add_to_history(item, cfg["history_size"])
         NOW_PLAYING[0] = {
             "title": item.get("title") or item.get("url", ""),
+            "pausable": True,
             "replay": lambda: play_mpv(item),
         }
         url = item.get("url", "")
@@ -1253,9 +1339,12 @@ def now_playing_screen(cfg, ui):
             f"   {c(C.GREEN, 'playing') if alive else c(C.DIM, 'player stopped')}",
             "─" * 44,
         ]
-        entries = ["replay", "toggle video", "go to…", "stop player", "detach & exit", "main menu"]
+        entries = ["replay", "toggle video", "go to…", "stop", "detach", "main menu"]
         if np.get("kind") == "station":
             entries.remove("toggle video")
+        pause = pause_action() if np.get("pausable") else None
+        if pause:
+            entries.insert(2, pause[0])
         idx = ui.pick(entries, "now playing ❯ ", "\n".join(header) + "\nEsc → main menu", "50%")
         if idx is None:
             return
@@ -1263,6 +1352,8 @@ def now_playing_screen(cfg, ui):
         if choice == "replay":
             if np.get("replay"):
                 np["replay"]()
+        elif choice in ("pause", "play"):
+            toggle_pause()
         elif choice == "toggle video":
             nv, live = toggle_video_setting()
             if not live and np.get("replay"):
@@ -1271,10 +1362,10 @@ def now_playing_screen(cfg, ui):
             dest = go_to_picker(ui)
             if dest:
                 raise GoTo(dest)
-        elif choice == "stop player":
+        elif choice == "stop":
             stop_shared()
             return
-        elif choice == "detach & exit":
+        elif choice == "detach":
             print(f"\n  {c(C.GREEN, '▶')}  {c(C.DIM, 'detached · playing in background')}\n")
             sys.exit(0)
         elif choice == "main menu":
@@ -1284,12 +1375,14 @@ def now_playing_screen(cfg, ui):
 def _run_mode(cfg, ui, choice, stop, play_mpv, goodbye, on_esc="quit"):
     if choice == "Search":
         run_search_mode(cfg, ui, stop, play_mpv, return_home=True)
+    elif choice == "Saved":
+        run_saved_mode(cfg, ui, None, stop, goodbye, on_esc=on_esc)
+    elif choice == "Presets":
+        run_saved_mode(cfg, ui, "preset", stop, goodbye, on_esc=on_esc)
     elif choice == "Radio":
-        run_radio_mode(cfg, ui, stop, play_mpv, goodbye, on_esc=on_esc)
-    elif choice == "Stations":
-        run_stations_mode(cfg, ui, stop, goodbye, on_esc=on_esc)
+        run_saved_mode(cfg, ui, "station", stop, goodbye, on_esc=on_esc)
     elif choice == "News":
-        run_news_mode(cfg, ui, stop, goodbye, on_esc=on_esc)
+        run_saved_mode(cfg, ui, "channel", stop, goodbye, on_esc=on_esc)
     elif choice == "History":
         run_history_screen(cfg, ui, stop, play_mpv)
 
@@ -1320,17 +1413,17 @@ def run_fzf(cfg, mode=None):
     signal.signal(signal.SIGTERM, _clean_exit)
 
     if mode in ("radio", "stations", "news"):
-        dest = {"radio": "Radio", "stations": "Stations", "news": "News"}[mode]
+        dest = {"radio": "Presets", "stations": "Radio", "news": "News"}[mode]
         _run_mode_loop(cfg, ui, dest, stop_shared, play_mpv, goodbye)
         return
 
     while True:
         clear_screen()
-        entries = ["Search", "Radio", "Stations", "News", "History"]
+        entries = ["Saved", "Search", "History"]
         if player_active():
             entries.insert(0, "▶ Now Playing")
         entries.append("Exit")
-        idx = ui.pick(entries, "main ❯ ", "yt-cli · search / radio / stations / news", "50%")
+        idx = ui.pick(entries, "main ❯ ", "yt-cli · saved / search / history", "50%")
         if idx is None:
             goodbye()
             return
@@ -1339,7 +1432,7 @@ def run_fzf(cfg, mode=None):
             if player_active():
                 act = ui.action(
                     ["Player is still running.", "─" * 44],
-                    [("leave playing in background", "d"), ("stop player and exit", "s")],
+                    [("detach (keeps playing)", "d"), ("exit (stops player)", "s")],
                 )
                 if act == "d":
                     print(
@@ -1508,7 +1601,7 @@ def prefetch_resolve(url, quality):
                 text=True,
                 timeout=90,
             )
-            lines = [l.strip() for l in result.stdout.splitlines() if l.strip()]
+            lines = [line.strip() for line in result.stdout.splitlines() if line.strip()]
             if result.returncode != 0 or not lines:
                 return
             video_url, audio_url = lines[0], (lines[1] if len(lines) > 1 else None)
@@ -1617,11 +1710,13 @@ def attach_detached():
         NOW_PLAYING[0] = {
             "title": title or station.get("name") or path,
             "kind": "station",
+            "pausable": False,
             "replay": lambda: relaunch_detached(path),
         }
     else:
         NOW_PLAYING[0] = {
             "title": title or path,
+            "pausable": True,
             "replay": lambda: relaunch_detached(path),
         }
     ATTACHED[0] = True
@@ -2012,6 +2107,7 @@ def _find_bin_dir():
 
 
 def prompt_save_search_result(cfg, result, ui):
+    refresh_config(cfg)
     title = result["title"]
     action = ui.action(
         [f'Save "{title}" as a preset?', "─" * 48],
@@ -2054,26 +2150,36 @@ class GoTo(Exception):
         self.dest = dest
 
 
-GO_TO_LABELS = {"radio": "Radio", "stations": "Stations", "news": "News", "search": "Search"}
+GO_TO_LABELS = {
+    "saved": "Saved",
+    "presets": "Presets",
+    "radio": "Radio",
+    "news": "News",
+    "search": "Search",
+}
 
 
 def go_to_picker(ui):
-    entries = ["Radio", "Stations", "News", "Search", "Home"]
-    idx = ui.pick(entries, "go to ❯ ", "Go to\n" + "─" * 44 + "\nEsc → stay here", "35%")
+    entries = ["Saved", "Presets", "Radio", "News", "Search", "Home"]
+    idx = ui.pick(entries, "go to ❯ ", "Go to\n" + "─" * 44 + "\nEsc → back", "35%")
     if idx is None:
         return None
     return {
+        "Saved": "saved",
+        "Presets": "presets",
         "Radio": "radio",
-        "Stations": "stations",
         "News": "news",
         "Search": "search",
         "Home": "home",
     }[entries[idx]]
 
 
-def prompt_save_channel(cfg, ui, name, url, channel_id=None, keywords=None, fallback_url=None):
+def prompt_save_channel(
+    cfg, ui, name, url, channel_id=None, keywords=None, fallback_url=None, channel_name=None
+):
     """Save a news source. Captures channel_id when resolvable (one yt-dlp
     call); falls back to keyword-only save when lookup fails."""
+    refresh_config(cfg)
     if not channel_id:
         sp = Spinner("Resolving channel...")
         sp.start()
@@ -2101,33 +2207,54 @@ def prompt_save_channel(cfg, ui, name, url, channel_id=None, keywords=None, fall
             return None
     ui.info([f'Save "{name}"', "", "Display name (Enter to use suggested):"], wait=False)
     final_name = ui.prompt("name") or name
-    ui.info(["Keywords, comma-separated (Enter to use name):"], wait=False)
-    kw_raw = ui.prompt("keywords")
-    kws = (
-        [k.strip().lower() for k in kw_raw.split(",")]
-        if kw_raw
-        else (keywords or [final_name.lower()])
+    if channel_id:
+        # The channel is the source now; keywords are legacy and unused.
+        kws = keywords or [final_name.lower()]
+        channel_name = channel_name or name
+    else:
+        ui.info(["Keywords, comma-separated (Enter to use name):"], wait=False)
+        kw_raw = ui.prompt("keywords")
+        kws = (
+            [k.strip().lower() for k in kw_raw.split(",")]
+            if kw_raw
+            else (keywords or [final_name.lower()])
+        )
+        channel_name = ""
+    slug = news_add_source(
+        cfg,
+        final_name,
+        kws,
+        channel_id=channel_id,
+        fallback_url=fallback_url,
+        channel_name=channel_name,
     )
-    slug = news_add_source(cfg, final_name, kws, channel_id=channel_id, fallback_url=fallback_url)
     kind = "full-channel" if channel_id else "keyword-only"
     ui.info([f"✓  Saved as [{kind} source.{slug}]"], wait=False)
     time.sleep(0.8)
     return slug
 
 
+def save_options(item):
+    """What can be kept from here. First letter of each label is unique."""
+    kind = item.get("kind") or "video"
+    if kind == "channel":
+        return [
+            ("channel: save this channel", "channel"),
+            ("video: save a fixed-link preset", "preset"),
+        ]
+    if kind == "station":
+        return [("station: save this station", "station")]
+    return [("preset: save as preset", "preset"), ("channel: save its channel", "channel")]
+
+
 def save_current(cfg, ui, item, default_kind="preset"):
     """Save the currently playing item without stopping playback."""
     title = item.get("title") or item.get("url", "")
     url = item.get("url", "")
-    preset_choice = ("save as music/video preset", "preset")
-    news_choice = ("save as news channel", "news")
-    choices = (
-        [news_choice, preset_choice] if default_kind == "news" else [preset_choice, news_choice]
-    )
-    action = ui.action([f'Save "{title}"', "─" * 48], choices)
+    action = ui.action([f'Save "{title}"', "─" * 48], save_options(item))
     if action == "preset":
         return prompt_save_search_result(cfg, {"title": title, "url": url}, ui)
-    if action == "news":
+    if action == "channel":
         return prompt_save_channel(
             cfg,
             ui,
@@ -2136,7 +2263,10 @@ def save_current(cfg, ui, item, default_kind="preset"):
             channel_id=item.get("channel_id"),
             keywords=item.get("keywords"),
             fallback_url=item.get("fallback_url"),
+            channel_name=item.get("channel_name"),
         )
+    if action == "station":
+        return prompt_save_station(cfg, ui, item)
     return None
 
 
@@ -2156,8 +2286,8 @@ def url_entry_flow(cfg, ui, url):
         [f"URL:  {c(C.BOLD, title)}", f"   {c(C.DIM, url[:70])}", "─" * 48],
         [
             ("play now", "play"),
-            ("save as preset", "preset"),
-            ("save as news channel", "channel"),
+            ("preset: save as preset", "preset"),
+            ("channel: save as channel", "channel"),
             ("cancel", "cancel"),
         ],
     )
@@ -2181,14 +2311,18 @@ def url_entry_flow(cfg, ui, url):
     return None
 
 
-def run_radio_mode(cfg, ui, stop, play_mpv, goodbye, on_esc="quit"):
+def run_radio_mode(cfg, ui, stop, play_mpv, goodbye, on_esc="quit", initial_slug=None):
     settings, presets = load_radio_cfg(cfg)
     now_playing = [None]
     search_cache = {}
 
     def play_radio(info):
         stop()
-        NOW_PLAYING[0] = {"title": info["name"], "replay": lambda: play_radio(info)}
+        NOW_PLAYING[0] = {
+            "title": info["name"],
+            "pausable": True,
+            "replay": lambda: play_radio(info),
+        }
         cmd = build_mpv_cmd(info["url"], settings, preset_overrides=info)
         PLAYER_PROC[0] = launch_player(cmd)
         now_playing[0] = info
@@ -2199,6 +2333,13 @@ def run_radio_mode(cfg, ui, stop, play_mpv, goodbye, on_esc="quit"):
             {"title": info["name"], "url": info["url"], "uploader": info["category"]},
             cfg["history_size"],
         )
+
+    if initial_slug:
+        info = presets.get(initial_slug)
+        if info:
+            play_radio(info)
+            radio_playing_loop(cfg, ui, info, settings, stop, play_radio, goodbye)
+        return
 
     while True:
         np_name = now_playing[0]["name"] if now_playing[0] else None
@@ -2301,9 +2442,11 @@ def radio_playing_loop(cfg, ui, info, settings, stop_fn, play_fn, goodbye_fn):
             if info.get("is_search_result")
             else [a for a in PLAY_ACTIONS_RADIO if a[1] != "k"]
         )
-        action = ui.action(header_lines, actions)
+        action = ui.action(header_lines, with_pause(actions))
         if action == "o":
             return False  # back to preset list, keep playing
+        elif action == "u":
+            toggle_pause()
         elif action == "v":
             nv, live = toggle_video_setting()
             settings["no_video"] = nv
@@ -2718,6 +2861,7 @@ def _station_play(cfg, station, stop_fn=stop_shared):
     NOW_PLAYING[0] = {
         "title": title,
         "kind": "station",
+        "pausable": False,
         "replay": lambda: _station_play(cfg, station, stop_fn),
     }
     proc, end_state = _station_launch(station)
@@ -2773,20 +2917,20 @@ def pick_station(stations, now_playing_name, ui):
     for station in stations:
         lines.append(format_station_row(station, now_playing_name))
         index_map.append(("station", station))
-    lines.append("  ⚙   manage stations")
+    lines.append("  ⚙   manage radio")
     index_map.append(("manage", None))
     header = (
-        "yt-cli · Stations"
+        "yt-cli · radio"
         + "\n"
         + "─" * 48
         + "\n"
         + "Esc → back   ·   type to filter or search radio-browser.info"
     )
-    query, idx = ui.pick_query(lines, "station ❯ ", header, "70%")
+    query, idx = ui.pick_query(lines, "radio ❯ ", header, "70%")
     if idx is not None and 0 <= idx < len(index_map):
         kind, value = index_map[idx]
         if kind == "search":
-            q = ui.query(["Stations · search radio-browser.info", "─" * 48, "Esc → back"])
+            q = ui.query(["Radio · search radio-browser.info", "─" * 48, "Esc → back"])
             if not q or not q.strip():
                 return None
             q = q.strip()
@@ -2795,7 +2939,7 @@ def pick_station(stations, now_playing_name, ui):
     q = query.strip()
     if not q:
         return None
-    if q.lower() in ("manage stations", "manage", "m"):
+    if q.lower() in ("manage radio", "manage stations", "manage", "m"):
         return ("manage", None)
     return ("url", q) if looks_like_url(q) else ("search", q)
 
@@ -2807,9 +2951,7 @@ def pick_station_results(results, query, ui):
         )
         return "retry" if action == "r" else None
     lines = [format_station_row(station) for station in results]
-    header = (
-        f"Stations · {c(C.BOLD, query)} ({len(results)})" + "\n" + "─" * 48 + "\n" + "Esc → back"
-    )
+    header = f"Radio · {c(C.BOLD, query)} ({len(results)})" + "\n" + "─" * 48 + "\n" + "Esc → back"
     idx = ui.pick(lines, "result ❯ ", header, "70%")
     if idx is None:
         return None
@@ -2842,6 +2984,7 @@ def _station_search_pick(ui, query):
 
 
 def prompt_save_station(cfg, ui, station):
+    refresh_config(cfg)
     title = station.get("name") or station.get("url", "station")
     action = ui.action(
         [f'Save "{title}" as a station?', "─" * 48],
@@ -2894,7 +3037,7 @@ def manage_stations_screen(cfg, ui):
                 f"{c(C.DIM, '[' + station.get('slug', '') + ']')}"
             )
             index_map.append(station)
-        idx = ui.pick(lines, "station ❯ ", "Manage stations\n" + "─" * 44 + "\nEsc → back", "70%")
+        idx = ui.pick(lines, "radio ❯ ", "Manage radio\n" + "─" * 44 + "\nEsc → back", "70%")
         if idx is None:
             break
         target = index_map[idx]
@@ -2928,10 +3071,10 @@ PLAY_ACTIONS_STATION = [
     ("history", "h"),
     ("replay", "r"),
     ("go to…", "g"),
-    ("stop player", "q"),
+    ("stop", "q"),
     ("exit", "x"),
-    ("keep (save)", "k"),
-    ("detach & exit", "d"),
+    ("save", "k"),
+    ("detach", "d"),
 ]
 
 
@@ -2985,7 +3128,7 @@ def station_playing_loop(cfg, ui, station, stop_fn, play_fn, goodbye_fn):
         if action == "o":
             return False
         if action == "s":
-            q = ui.query(["Stations · search radio-browser.info", "─" * 48, "Esc → back"])
+            q = ui.query(["Radio · search radio-browser.info", "─" * 48, "Esc → back"])
             if q and q.strip():
                 q = q.strip()
                 if looks_like_url(q):
@@ -3020,7 +3163,16 @@ def station_playing_loop(cfg, ui, station, stop_fn, play_fn, goodbye_fn):
             sys.exit(0)
 
 
-def run_stations_mode(cfg, ui, stop, goodbye, on_esc="quit"):
+def run_stations_mode(cfg, ui, stop, goodbye, on_esc="quit", initial_slug=None):
+    if initial_slug:
+        stations = load_stations_cfg(cfg)
+        target = next((s for s in stations if s.get("slug") == initial_slug), None)
+        if target is not None:
+            play_fn = lambda st: _station_play(cfg, st, stop_fn=stop)  # noqa: E731
+            play_fn(target)
+            station_playing_loop(cfg, ui, target, stop, play_fn, goodbye)
+        return
+
     while True:
         stations = load_stations_cfg(cfg)
         now = NOW_PLAYING[0]
@@ -3067,6 +3219,7 @@ def load_news_cfg(cfg):
         sources[s["id"]] = {
             "name": s.get("name", s["id"]),
             "channel_id": s.get("channel_id"),
+            "channel_name": s.get("channel_name", ""),
             "keywords": s.get("keywords", [s["id"]]),
             "fallback_url": s.get("fallback_url", ""),
             "enabled": True,
@@ -3080,7 +3233,7 @@ def load_news_cfg(cfg):
     return settings, sources
 
 
-def news_add_source(cfg, name, keywords, channel_id=None, fallback_url=None):
+def news_add_source(cfg, name, keywords, channel_id=None, fallback_url=None, channel_name=""):
     slug = _slugify(name)
     existing = [s["id"] for s in cfg["news"]["sources"]]
     base = slug
@@ -3093,6 +3246,7 @@ def news_add_source(cfg, name, keywords, channel_id=None, fallback_url=None):
             "id": slug,
             "name": name,
             "channel_id": channel_id or "",
+            "channel_name": channel_name or "",
             "keywords": keywords or [name.lower()],
             "fallback_url": fallback_url
             or f"https://www.youtube.com/results?search_query={urllib.parse.quote(name)}",
@@ -3117,6 +3271,256 @@ def news_toggle_source(cfg, sid, enable):
 
 def get_all_sources_from_config(cfg):
     return [dict(s) for s in cfg["news"]["sources"]]
+
+
+# ---------- SAVED CATALOG ----------
+
+
+KIND_MARK = {"channel": "●", "station": "♪", "preset": "▷"}
+KIND_LABEL = {"channel": "channel", "station": "radio", "preset": "preset"}
+KIND_ORDER = {"channel": 0, "station": 1, "preset": 2}
+
+
+def saved_items(cfg):
+    """One normalized view over the three config areas. Never writes."""
+    items = []
+    for source in (cfg.get("news") or {}).get("sources") or []:
+        items.append(
+            {
+                "kind": "channel",
+                "id": source.get("id", ""),
+                "name": source.get("name") or source.get("id", ""),
+                "enabled": bool(source.get("enabled", True)),
+                "group": "",
+                "url": "",
+                "channel_id": source.get("channel_id") or "",
+                "channel_name": source.get("channel_name") or "",
+                "loop": False,
+                "no_video": False,
+                "raw": source,
+            }
+        )
+    stations = cfg.get("stations")
+    if isinstance(stations, list):
+        for station in stations:
+            items.append(
+                {
+                    "kind": "station",
+                    "id": station.get("slug", ""),
+                    "name": station.get("name") or station.get("url", ""),
+                    "enabled": bool(station.get("enabled", True)),
+                    "group": station.get("countrycode") or "",
+                    "url": station.get("url", ""),
+                    "channel_id": "",
+                    "channel_name": "",
+                    "loop": False,
+                    "no_video": False,
+                    "raw": station,
+                }
+            )
+    presets = (cfg.get("radio") or {}).get("presets") or []
+    for preset in presets:
+        items.append(
+            {
+                "kind": "preset",
+                "id": preset.get("slug", ""),
+                "name": preset.get("name") or preset.get("slug", ""),
+                "enabled": bool(preset.get("enabled", True)),
+                "group": preset.get("category") or "",
+                "url": preset.get("url", ""),
+                "channel_id": "",
+                "channel_name": "",
+                "loop": bool(preset.get("loop", False)),
+                "no_video": bool(preset.get("no_video", False)),
+                "raw": preset,
+            }
+        )
+    items.sort(key=lambda item: (KIND_ORDER[item["kind"]], item["name"].lower()))
+    return items
+
+
+def format_saved_row(item, now_playing=None):
+    mark = KIND_MARK.get(item["kind"], "·")
+    if not item.get("enabled", True):
+        mark = "○"
+    elif now_playing and item["name"] == now_playing:
+        mark = "▶"
+    name = truncate_display(item["name"], 32)
+    name_cell = name + " " * max(0, 32 - display_width(name))
+    tag = f"[{KIND_LABEL.get(item['kind'], item['kind'])}]"
+    return f"{mark}  {name_cell}  {c(C.DIM, tag)}"
+
+
+def pick_saved(items, ui, kind=None):
+    visible = [item for item in items if item.get("enabled", True)]
+    lines = ["  🔍  search…"]
+    lines += [format_saved_row(item) for item in visible]
+    lines.append("  ⚙   manage saved")
+    index_map = [("search", None)]
+    index_map += [("item", item) for item in visible]
+    index_map.append(("manage", None))
+
+    title = "yt-cli · saved" + (f" · {kind}" if kind else "")
+    header = title + "\n" + "─" * 48 + "\nEsc → back   ·   type to search"
+    query, idx = ui.pick_query(lines, "saved ❯ ", header, "70%")
+    if idx is not None and 0 <= idx < len(index_map):
+        action, value = index_map[idx]
+        if action == "search":
+            return ("search", "")
+        if action == "manage":
+            return ("manage", None)
+        return value
+    q = (query or "").strip()
+    if not q:
+        return None
+    if q.lower() in ("manage saved", "manage", "m"):
+        return ("manage", None)
+    return ("url", q) if looks_like_url(q) else ("search", q)
+
+
+def manage_saved_screen(cfg, ui):
+    entries = ["Presets", "Radio", "Channels", "Back"]
+    idx = ui.pick(entries, "manage ❯ ", "Manage saved\n" + "─" * 44, "35%")
+    if idx is None:
+        return
+    choice = entries[idx]
+    if choice == "Presets":
+        manage_presets_screen(cfg, ui)
+    elif choice == "Radio":
+        manage_stations_screen(cfg, ui)
+    elif choice == "Channels":
+        manage_sources_screen(cfg, ui)
+
+
+def _saved_search(cfg, ui, kind, stop, play_mpv, goodbye):
+    if kind == "station":
+        q = ui.query(["Saved · search radio-browser.info", "─" * 48, "Esc → back"])
+        if not q or not q.strip():
+            return
+        station = _station_search_pick(ui, q.strip())
+        if station:
+            play_fn = lambda st: _station_play(cfg, st, stop_fn=stop)  # noqa: E731
+            play_fn(station)
+            station_playing_loop(cfg, ui, station, stop, play_fn, goodbye)
+        return
+
+    query = ui.query(["Saved · search YouTube", "─" * 48, "Esc → back"])
+    if not query or not query.strip():
+        return
+    query = query.strip()
+    if looks_like_url(query):
+        entry = url_entry_flow(cfg, ui, query)
+        if entry is not None:
+            run_search_mode(
+                cfg,
+                ui,
+                stop,
+                play_mpv,
+                return_home=True,
+                initial_items=[entry],
+                initial_header="yt-cli · url",
+            )
+        return
+    try:
+        results = search_with_spinner(query, cfg["result_count"])
+    except SearchError as exc:
+        ui.info([f"search failed: {exc}"])
+        return
+    if not results:
+        ui.info([f'No results for "{query}"'])
+        return
+    run_search_mode(
+        cfg,
+        ui,
+        stop,
+        play_mpv,
+        return_home=True,
+        initial_items=results,
+        initial_header=f"yt-cli · results: {query} ({len(results)})",
+    )
+
+
+def run_saved_mode(cfg, ui, kind=None, stop=None, goodbye=None, on_esc="quit"):
+    """One entry point for every saved thing. Modes become filters."""
+    stop = stop or stop_shared
+
+    if goodbye is None:
+
+        def default_goodbye():
+            stop()
+            print(f"\n  {c(C.DIM, 'Goodbye! 👋')}\n")
+
+        goodbye = default_goodbye
+
+    play_mpv = _search_play_default(cfg)
+
+    if kind == "preset":
+        run_radio_mode(cfg, ui, stop, play_mpv, goodbye, on_esc=on_esc)
+        return
+    if kind == "station":
+        run_stations_mode(cfg, ui, stop, goodbye, on_esc=on_esc)
+        return
+    if kind == "channel":
+        run_news_mode(cfg, ui, stop, goodbye, on_esc=on_esc)
+        return
+
+    while True:
+        cfg = load_config()
+        result = pick_saved(saved_items(cfg), ui)
+        if result is None:
+            if on_esc == "home":
+                return
+            goodbye()
+            return
+
+        if isinstance(result, tuple):
+            action, value = result
+            if action == "manage":
+                manage_saved_screen(cfg, ui)
+                continue
+            if action == "url":
+                entry = url_entry_flow(cfg, ui, value)
+                if entry is not None:
+                    run_search_mode(
+                        cfg,
+                        ui,
+                        stop,
+                        play_mpv,
+                        return_home=True,
+                        initial_items=[entry],
+                        initial_header="yt-cli · url",
+                    )
+                continue
+            _saved_search(cfg, ui, kind, stop, play_mpv, goodbye)
+            continue
+
+        item = result
+        if not item.get("enabled", True):
+            ui.info([f"{item['name']} is disabled. Enable it in manage saved."])
+            continue
+        if item["kind"] == "channel" and not item["channel_id"]:
+            ui.info(
+                [
+                    f"⚠  {item['name']} has no channel id.",
+                    "manage saved → Channels → change binding",
+                ]
+            )
+            continue
+
+        if item["kind"] == "channel":
+            run_news_mode(cfg, ui, stop, goodbye, on_esc="home", initial_source=item["id"])
+        elif item["kind"] == "station":
+            run_stations_mode(cfg, ui, stop, goodbye, on_esc="home", initial_slug=item["id"])
+        else:
+            run_radio_mode(
+                cfg,
+                ui,
+                stop,
+                play_mpv,
+                goodbye,
+                on_esc="home",
+                initial_slug=item["id"],
+            )
 
 
 # ─── HTTP ─────────────────────────────────────────────────────────────────────
@@ -3165,6 +3569,7 @@ def parse_relative_time(time_text):
         return 9999
     time_text = time_text.lower()
     patterns = [
+        (r"(\d+)\s*year", 8760),
         (r"(\d+)\s*hour", 1),
         (r"(\d+)\s*day", 24),
         (r"(\d+)\s*week", 168),
@@ -3181,184 +3586,561 @@ def parse_relative_time(time_text):
     return 9999
 
 
-def parse_video_renderer(video, keywords, channel_name, recent_hours=24):
+# ---------- channel listings (lockupViewModel) ----------
+
+
+class ChannelError(Exception):
+    """The channel page could not be read. Never silently becomes a search."""
+
+
+_AGO_UNITS = {
+    "y": 8760,
+    "mo": 720,
+    "w": 168,
+    "d": 24,
+    "hr": 1,
+    "h": 1,
+    "min": 1 / 60,
+    "m": 1 / 60,
+    "sec": 1 / 3600,
+    "s": 1 / 3600,
+}
+
+
+def parse_ago_text(text):
+    """Hours from YouTube text like "Streamed 2h ago" or "3 hours ago"."""
+    if not text:
+        return 9999
+    long_form = parse_relative_time(text)
+    if long_form < 9999:
+        return long_form
+    match = re.search(r"(\d+)\s*(mo|y|w|d|hr|h|min|sec|m|s)\b", text.lower())
+    if not match:
+        return 9999
+    return int(match.group(1)) * _AGO_UNITS[match.group(2)]
+
+
+def _parse_count(text):
+    """ "1.2K" -> 1200, "8.6" -> 8, "" -> 0."""
+    match = re.match(r"([\d.,]+)\s*([KMB]?)", (text or "").strip(), re.I)
+    if not match:
+        return 0
     try:
-        video_id = video.get("videoId", "")
-        title_runs = video.get("title", {}).get("runs", [])
-        title = "".join(run.get("text", "") for run in title_runs)
-        if not title:
-            title = video.get("title", {}).get("simpleText", "")
+        number = float(match.group(1).replace(",", "").strip("."))
+    except ValueError:
+        return 0
+    multiplier = {"": 1, "K": 1_000, "M": 1_000_000, "B": 1_000_000_000}
+    return int(number * multiplier[match.group(2).upper()])
 
-        title_lower = title.lower()
-        if not any(kw in title_lower for kw in keywords):
-            return None
 
-        # Live badge check
-        is_live = False
-        for badge in video.get("badges", []):
-            br = badge.get("metadataBadgeRenderer", {})
-            if (
-                br.get("style") == "BADGE_STYLE_TYPE_LIVE_NOW"
-                or br.get("label", "").upper() == "LIVE"
-            ):
-                is_live = True
-                break
+def classify_lockup_meta(rows):
+    """Turn a lockup's metadataRows into live / upcoming / past / unknown.
 
-        for overlay in video.get("thumbnailOverlays", []):
-            if "thumbnailOverlayTimeStatusRenderer" in overlay:
-                if overlay["thumbnailOverlayTimeStatusRenderer"].get("style") == "LIVE":
-                    is_live = True
-                    break
+    The page metadata is the evidence: "N watching" means live now,
+    "Scheduled for" means upcoming, "Streamed ... ago" means it already ended.
+    Cross-checked against yt-dlp's live_status on 2026-11-04.
+    """
+    row_texts = []
+    for row in rows or []:
+        parts = [p.get("text", {}).get("content", "") for p in row.get("metadataParts", [])]
+        text = " ".join(part for part in parts if part).strip()
+        if text:
+            row_texts.append(text)
 
-        # Recency
-        published_text = ""
-        hours_ago = 9999
-        if "publishedTimeText" in video:
-            pt = video["publishedTimeText"]
-            if "runs" in pt:
-                published_text = "".join(r.get("text", "") for r in pt["runs"])
-            else:
-                published_text = pt.get("simpleText", "")
-            hours_ago = parse_relative_time(published_text)
+    joined = " ".join(row_texts)
+    meta = {
+        "status": "unknown",
+        "viewers": 0,
+        "viewers_text": "",
+        "schedule_text": "",
+        "streamed_text": "",
+        "hours_ago": 9999,
+    }
 
-        if not is_live and hours_ago > recent_hours:
-            return None
+    watching = re.search(r"([\d.,]+[KMB]?)\s+watching", joined, re.I)
+    if watching:
+        meta["status"] = "live"
+        meta["viewers_text"] = watching.group(0)
+        meta["viewers"] = _parse_count(watching.group(1))
+        return meta
 
-        # View count
-        view_count = ""
-        if "viewCountText" in video:
-            vct = video["viewCountText"]
-            if "simpleText" in vct:
-                view_count = vct["simpleText"]
-            elif "runs" in vct:
-                view_count = "".join(r.get("text", "") for r in vct["runs"])
+    scheduled = next((t for t in row_texts if "scheduled for" in t.lower()), "")
+    if scheduled or any("waiting" in t.lower() for t in row_texts):
+        meta["status"] = "upcoming"
+        meta["schedule_text"] = scheduled
+        return meta
 
-        return {
-            "id": video_id,
-            "title": html.unescape(title),
-            "url": f"https://www.youtube.com/watch?v={video_id}",
-            "is_live": is_live,
-            "view_count": view_count,
-            "published_text": published_text,
-            "hours_ago": hours_ago,
-            "source": channel_name,
-        }
-    except Exception:
+    streamed = next(
+        (t for t in row_texts if "streamed" in t.lower() or "premiered" in t.lower()), ""
+    )
+    if streamed:
+        meta["status"] = "past"
+        meta["streamed_text"] = streamed
+        meta["hours_ago"] = parse_ago_text(streamed)
+        return meta
+
+    return meta
+
+
+def parse_lockup_video(lockup):
+    """One lockupViewModel -> a stream item, or None when it has no video."""
+    video_id = lockup.get("contentId") or ""
+    metadata = (lockup.get("metadata") or {}).get("lockupMetadataViewModel") or {}
+    title = (metadata.get("title") or {}).get("content") or ""
+    if not video_id or not title:
+        return None
+    rows = ((metadata.get("metadata") or {}).get("contentMetadataViewModel") or {}).get(
+        "metadataRows"
+    ) or []
+    meta = classify_lockup_meta(rows)
+    return {
+        "id": video_id,
+        "title": html.unescape(title),
+        "url": f"https://www.youtube.com/watch?v={video_id}",
+        "source": "",
+        "is_live": meta["status"] == "live",
+        **meta,
+    }
+
+
+def parse_lockup_videos(data):
+    """Collect every lockupViewModel in a channel page blob."""
+    found = []
+
+    def walk(obj):
+        if isinstance(obj, dict):
+            lockup = obj.get("lockupViewModel")
+            if isinstance(lockup, dict):
+                found.append(lockup)
+                return
+            for value in obj.values():
+                walk(value)
+        elif isinstance(obj, list):
+            for value in obj:
+                walk(value)
+
+    walk(data)
+    items = []
+    for lockup in found:
+        item = parse_lockup_video(lockup)
+        if item:
+            items.append(item)
+    return items
+
+
+def sort_stream_items(items):
+    """Live (most viewers first), then upcoming, then past (newest first)."""
+    live = sorted(
+        [i for i in items if i.get("status") == "live"],
+        key=lambda i: (-i.get("viewers", 0), i.get("title", "")),
+    )
+    upcoming = [i for i in items if i.get("status") == "upcoming"]
+    past = sorted(
+        [i for i in items if i.get("status") == "past"],
+        key=lambda i: i.get("hours_ago", 9999),
+    )
+    rest = [i for i in items if i.get("status") not in ("live", "upcoming", "past")]
+    return live + upcoming + past + rest
+
+
+def channel_streams_url(channel_id):
+    # channel ids come from config, but keep URL construction strict anyway
+    if not re.fullmatch(r"[A-Za-z0-9_-]{2,64}", channel_id or ""):
+        raise ChannelError("invalid channel id")
+    return f"https://www.youtube.com/channel/{channel_id}/streams"
+
+
+def page_title(html_content):
+    match = re.search(r"<title>(.*?)</title>", html_content or "", re.S | re.I)
+    if not match:
+        return ""
+    title = html.unescape(match.group(1)).strip()
+    if title.endswith(" - YouTube"):
+        title = title[: -len(" - YouTube")]
+    return title
+
+
+def search_channel_by_name(name, timeout=15):
+    """Find a channel whose title exactly matches the name (case-insensitive)."""
+    query = (name or "").strip()
+    if not query:
+        return None
+    url = (
+        "https://www.youtube.com/results?search_query="
+        + urllib.parse.quote(query)
+        + "&sp=EgIQAg%253D%253D"
+    )
+    html_content = fetch_url(url, timeout=timeout)
+    if not html_content or html_content.startswith(("Error", "HTTP")):
+        return None
+    data = extract_yt_initial_data(html_content)
+    if not data:
         return None
 
+    found = []
 
-def find_streams(data, keywords, channel_name, recent_hours=24):
-    streams = []
+    def walk(obj):
+        if isinstance(obj, dict):
+            renderer = obj.get("channelRenderer")
+            if isinstance(renderer, dict):
+                found.append(renderer)
+                return
+            for value in obj.values():
+                walk(value)
+        elif isinstance(obj, list):
+            for value in obj:
+                walk(value)
+
+    walk(data)
+    needle = query.lower()
+    for renderer in found:
+        title = (renderer.get("title") or {}).get("simpleText") or ""
+        if title.strip().lower() == needle:
+            channel_id = renderer.get("channelId") or ""
+            if channel_id:
+                return {"id": channel_id, "title": title}
+    return None
+
+
+def resolve_channel_id(ref, timeout=15):
+    """Resolve UC..., @handle, a handle, or a channel URL to {id, title}."""
+    ref = (ref or "").strip()
+    if not ref:
+        return None
+    if ref.startswith("http"):
+        url = ref
+        from_url = re.search(r"/channel/(UC[\w-]{20,24})", ref)
+        by_id = from_url.group(1) if from_url else None
+    elif ref.startswith("@"):
+        url = "https://www.youtube.com/" + ref
+        by_id = None
+    elif re.fullmatch(r"UC[\w-]{20,24}", ref):
+        url = channel_streams_url(ref)
+        by_id = ref
+    else:
+        by_name = search_channel_by_name(ref, timeout)
+        if by_name:
+            return by_name
+        url = "https://www.youtube.com/@" + ref.replace(" ", "")
+        by_id = None
+
+    html_content = fetch_url(url, timeout=timeout)
+    if not html_content or html_content.startswith(("Error", "HTTP")):
+        return None
+
+    match = re.search(
+        r'<link rel="canonical" href="https://www\.youtube\.com/channel/(UC[\w-]{20,24})"',
+        html_content,
+    )
+    if not match:
+        match = re.search(r'"browseId":"(UC[\w-]{20,24})"', html_content)
+    if not match and by_id:
+        match = re.match(r"(UC[\w-]{20,24})", by_id)
+    if not match:
+        return None
+    return {"id": match.group(1), "title": page_title(html_content)}
+
+
+def channel_status(entry, timeout=15):
+    """Read-only channel check. Never rewrites the entry."""
+    channel_id = (entry or {}).get("channel_id") or ""
+    name = (entry or {}).get("name") or (entry or {}).get("id", "")
+    result = {
+        "id": (entry or {}).get("id", ""),
+        "name": name,
+        "channel_id": channel_id,
+        "channel_title": "",
+        "status": "missing-id",
+        "error": "",
+        "duplicate": False,
+    }
+    if not channel_id:
+        return result
     try:
-        contents = data.get("contents") or data.get("response", {}).get("contents")
-        if not contents:
-            return streams
+        html_content = fetch_url(channel_streams_url(channel_id), timeout=timeout)
+    except ChannelError as exc:
+        result["status"] = "invalid-id"
+        result["error"] = str(exc)
+        return result
+    except (OSError, ValueError) as exc:
+        result["status"] = "unknown"
+        result["error"] = str(exc)
+        return result
+    if html_content.startswith(("Error", "HTTP")):
+        result["status"] = "dead" if "404" in html_content else "unknown"
+        result["error"] = html_content[:80]
+        return result
+    title = page_title(html_content)
+    result["channel_title"] = title
+    if not title:
+        result["status"] = "unknown"
+        result["error"] = "no page title"
+        return result
+    expected = ((entry or {}).get("channel_name") or name).strip().lower()
+    result["status"] = "ok" if title.strip().lower() == expected else "label-mismatch"
+    return result
 
-        browse = contents.get("twoColumnBrowseResultsRenderer", {})
-        tabs = browse.get("tabs", [])
 
-        for tab in tabs:
-            content = tab.get("tabRenderer", {}).get("content", {})
-            grid = content.get("richGridRenderer", {})
-            sections = grid.get("contents", []) or content.get("sectionListRenderer", {}).get(
-                "contents", []
+def verify_channels(cfg, timeout=15):
+    sources = (cfg.get("news") or {}).get("sources") or []
+    report = [channel_status(entry, timeout) for entry in sources]
+    counts = {}
+    for item in report:
+        if item["channel_id"]:
+            counts[item["channel_id"]] = counts.get(item["channel_id"], 0) + 1
+    for item in report:
+        item["duplicate"] = counts.get(item["channel_id"], 0) > 1
+    return report
+
+
+def apply_channel_fixes(cfg, report):
+    """Apply only the safe subset: exact-name ids, confirmed-dead disables."""
+    sources = (cfg.get("news") or {}).get("sources") or []
+    by_id = {entry.get("id"): entry for entry in sources}
+    bound = disabled = skipped = 0
+    for item in report:
+        entry = by_id.get(item.get("id"))
+        if not entry:
+            skipped += 1
+            continue
+        status = item.get("status")
+        if status == "missing-id":
+            resolved = resolve_channel_id(item.get("name") or "")
+            exact = (
+                resolved
+                and (resolved.get("title") or "").strip().lower()
+                == (item.get("name") or "").strip().lower()
             )
-
-            for section in sections:
-                videos = []
-
-                if "richItemRenderer" in section:
-                    item = section["richItemRenderer"].get("content", {})
-                    v = item.get("videoRenderer")
-                    if v:
-                        videos.append(v)
-
-                elif "shelfRenderer" in section:
-                    shelf_content = section["shelfRenderer"].get("content", {})
-                    if "horizontalListRenderer" in shelf_content:
-                        for item in shelf_content["horizontalListRenderer"].get("items", []):
-                            v = item.get("gridVideoRenderer")
-                            if v:
-                                videos.append(v)
-                    elif "expandedShelfContentsRenderer" in shelf_content:
-                        for item in shelf_content["expandedShelfContentsRenderer"].get("items", []):
-                            v = item.get("videoRenderer")
-                            if v:
-                                videos.append(v)
-
-                elif "itemSectionRenderer" in section:
-                    for item in section["itemSectionRenderer"].get("contents", []):
-                        v = item.get("videoRenderer") or item.get("gridVideoRenderer")
-                        if v:
-                            videos.append(v)
-
-                for v in videos:
-                    info = parse_video_renderer(v, keywords, channel_name, recent_hours)
-                    if info:
-                        streams.append(info)
-
-    except Exception:
-        pass
-
-    streams.sort(key=lambda x: (not x["is_live"], x.get("hours_ago", 9999)))
-    return streams
-
-
-def search_youtube(query, keywords, channel_id=None, timeout=15, recent_hours=24):
-    streams = []
-
-    # Channel streams page
-    if channel_id:
-        if channel_id.startswith("@") or not channel_id.startswith("UC"):
-            handle = channel_id if channel_id.startswith("@") else f"@{channel_id}"
-            channel_url = f"https://www.youtube.com/{handle}/streams"
+            if exact and resolved:
+                entry["channel_id"] = resolved["id"]
+                entry["channel_name"] = resolved["title"]
+                bound += 1
+            else:
+                skipped += 1
+        elif status == "dead":
+            entry["enabled"] = False
+            disabled += 1
         else:
-            channel_url = f"https://www.youtube.com/channel/{channel_id}/streams"
-
-        html_content = fetch_url(channel_url, timeout=timeout)
-        if not html_content.startswith(("Error", "HTTP")):
-            data = extract_yt_initial_data(html_content)
-            if data:
-                streams.extend(find_streams(data, keywords, query, recent_hours))
-
-    # YouTube search (live filter)
-    search_url = f"https://www.youtube.com/results?search_query={urllib.parse.quote(query + ' live')}&sp=EgJAAQ%253D%253D"
-    html_content = fetch_url(search_url, timeout=timeout)
-    if not html_content.startswith(("Error", "HTTP")):
-        data = extract_yt_initial_data(html_content)
-        if data:
-            try:
-                contents = (
-                    data.get("contents", {})
-                    .get("twoColumnSearchResultsRenderer", {})
-                    .get("primaryContents", {})
-                    .get("sectionListRenderer", {})
-                    .get("contents", [])
-                )
-                for section in contents:
-                    if "itemSectionRenderer" in section:
-                        for item in section["itemSectionRenderer"].get("contents", []):
-                            v = item.get("videoRenderer")
-                            if v:
-                                info = parse_video_renderer(
-                                    v, keywords, "YouTube Search", recent_hours
-                                )
-                                if info:
-                                    streams.append(info)
-            except Exception:
-                pass
-
-    # Deduplicate by video ID, live first
-    seen, unique = set(), []
-    for s in streams:
-        if s["id"] not in seen:
-            seen.add(s["id"])
-            unique.append(s)
-    unique.sort(key=lambda x: (not x["is_live"], x.get("hours_ago", 9999)))
-    return unique
+            skipped += 1
+    if bound or disabled:
+        save_config(cfg)
+    return {"bound": bound, "disabled": disabled, "skipped": skipped}
 
 
-# ─── PLAYBACK ─────────────────────────────────────────────────────────────────
+def add_channel(cfg, name, ref=None):
+    """Resolve a channel and add it as a new news source."""
+    resolved = resolve_channel_id(ref or name)
+    if not resolved:
+        return None
+    slug = news_add_source(
+        cfg,
+        name,
+        [name.lower()],
+        channel_id=resolved["id"],
+        fallback_url=f"https://www.youtube.com/channel/{resolved['id']}/streams",
+        channel_name=resolved["title"],
+    )
+    return {"id": slug, "channel_id": resolved["id"], "channel_title": resolved["title"]}
+
+
+def bind_channel(cfg, source_id, ref):
+    """Point an existing source at a channel. Returns the new binding or None."""
+    sources = (cfg.get("news") or {}).get("sources") or []
+    target = None
+    needle = (source_id or "").lower()
+    for entry in sources:
+        if (entry.get("id") or "").lower() == needle:
+            target = entry
+            break
+    if target is None:
+        return None
+    resolved = resolve_channel_id(ref)
+    if not resolved:
+        return None
+    target["channel_id"] = resolved["id"]
+    target["channel_name"] = resolved["title"]
+    save_config(cfg)
+    return {
+        "id": target["id"],
+        "channel_id": resolved["id"],
+        "channel_title": resolved["title"],
+    }
+
+
+def choose_cli_stream(items, allow_replay=False):
+    """CLI choice: top live, else newest replay only when explicitly allowed."""
+    live = [item for item in items if item.get("status") == "live"]
+    if live:
+        return live[0]
+    if not allow_replay:
+        return None
+    past = [item for item in items if item.get("status") == "past"]
+    past.sort(key=lambda item: item.get("hours_ago", 9999))
+    return past[0] if past else None
+
+
+def channel_lives(channel_id, timeout=15):
+    """The channel's own live/upcoming/replay list. Raises ChannelError.
+
+    Deliberately does not call any search: a channel source shows what the
+    channel is serving, never a YouTube-wide guess.
+    """
+    if not channel_id:
+        raise ChannelError("no channel id for this source")
+    html_content = fetch_url(channel_streams_url(channel_id), timeout=timeout)
+    if html_content.startswith(("Error", "HTTP")):
+        if "404" in html_content:
+            raise ChannelError("channel not found (404)")
+        raise ChannelError("could not fetch channel page")
+    data = extract_yt_initial_data(html_content)
+    if not data:
+        raise ChannelError("could not read channel page")
+    items = parse_lockup_videos(data)
+    if not items:
+        raise ChannelError("could not read channel page")
+    return sort_stream_items(items)
+
+
+def phrase_in_title(query, title):
+    """Whole-phrase match on normalized text.
+
+    This is the fix for the drift bug: "tv patrol" must not match
+    "PAW Patrol Livestream" just because "patrol live" is a substring.
+    """
+
+    def norm(text):
+        return re.sub(r"\s+", " ", (text or "").lower()).strip()
+
+    needle = norm(query)
+    return bool(needle) and needle in norm(title)
+
+
+def _renderer_title(video):
+    runs = (video.get("title") or {}).get("runs") or []
+    title = "".join(run.get("text", "") for run in runs)
+    return title or (video.get("title") or {}).get("simpleText", "")
+
+
+def _renderer_is_live(video):
+    for badge in video.get("badges") or []:
+        renderer = badge.get("metadataBadgeRenderer") or {}
+        if (
+            renderer.get("style") == "BADGE_STYLE_TYPE_LIVE_NOW"
+            or renderer.get("label", "").upper() == "LIVE"
+        ):
+            return True
+    for overlay in video.get("thumbnailOverlays") or []:
+        status = (overlay.get("thumbnailOverlayTimeStatusRenderer") or {}).get("style")
+        if status == "LIVE":
+            return True
+    return False
+
+
+def parse_search_video(video):
+    """One search videoRenderer -> a stream item (no keyword filtering here)."""
+    video_id = video.get("videoId") or ""
+    title = _renderer_title(video)
+    if not video_id or not title:
+        return None
+    runs = (video.get("ownerText") or {}).get("runs") or []
+    source = "".join(run.get("text", "") for run in runs)
+    live = _renderer_is_live(video)
+    published = ""
+    published_text = video.get("publishedTimeText") or {}
+    if "simpleText" in published_text:
+        published = published_text["simpleText"]
+    elif "runs" in published_text:
+        published = "".join(run.get("text", "") for run in published_text["runs"])
+    hours_ago = parse_ago_text(published)
+    status = "live" if live else ("past" if hours_ago < 9999 else "unknown")
+    return {
+        "id": video_id,
+        "title": html.unescape(title),
+        "url": f"https://www.youtube.com/watch?v={video_id}",
+        "source": source,
+        "status": status,
+        "is_live": live,
+        "viewers": 0,
+        "viewers_text": "",
+        "schedule_text": "",
+        "streamed_text": published,
+        "hours_ago": hours_ago,
+    }
+
+
+def _search_page_items(data):
+    """Collect videoRenderer entries from any search-results page layout."""
+    sections = []
+
+    def walk(obj):
+        if isinstance(obj, dict):
+            section = obj.get("itemSectionRenderer")
+            if isinstance(section, dict):
+                sections.append(section)
+                return
+            for value in obj.values():
+                walk(value)
+        elif isinstance(obj, list):
+            for value in obj:
+                walk(value)
+
+    walk(data)
+    items = []
+    for section in sections:
+        for item in section.get("contents") or []:
+            if not isinstance(item, dict):
+                continue
+            video = item.get("videoRenderer")
+            if not isinstance(video, dict):
+                continue
+            parsed = parse_search_video(video)
+            if parsed:
+                items.append(parsed)
+    return items
+
+
+def search_live(query, timeout=15, include_recent=True, recent_hours=24):
+    """YouTube-wide live search, used only for the explicit search path.
+
+    Live results win. When nothing is live, recent replays are returned only
+    when include_recent is set, and they keep status "past" so nothing claims
+    to be live.
+    """
+    url = (
+        "https://www.youtube.com/results?search_query="
+        + urllib.parse.quote(query + " live")
+        + "&sp=EgJAAQ%253D%253D"
+    )
+    html_content = fetch_url(url, timeout=timeout)
+    if not html_content or html_content.startswith(("Error", "HTTP")):
+        return []
+    data = extract_yt_initial_data(html_content)
+    if not data:
+        return []
+
+    candidates = [i for i in _search_page_items(data) if phrase_in_title(query, i["title"])]
+    live = sorted(
+        [i for i in candidates if i["status"] == "live"],
+        key=lambda i: (-i.get("viewers", 0), i["title"]),
+    )
+    if live:
+        chosen = live
+    elif include_recent:
+        chosen = sorted(
+            [i for i in candidates if i["status"] == "past" and i["hours_ago"] <= recent_hours],
+            key=lambda i: i["hours_ago"],
+        )
+    else:
+        chosen = []
+
+    seen = set()
+    result = []
+    for item in chosen:
+        if item["id"] in seen:
+            continue
+        seen.add(item["id"])
+        result.append(item)
+    return result
 
 
 def get_direct_stream_url(youtube_url, quality="720"):
@@ -3470,17 +4252,40 @@ def launch_news_player(url, player, quality="720", direct_url=None):
 # ─── NEWS MODE ─────────────────────────────────────────────────────────────────
 
 
+def stream_is_playable(stream):
+    return stream.get("status") != "upcoming"
+
+
+def stream_pausable(stream):
+    if (stream or {}).get("kind") == "station":
+        return False
+    return (stream or {}).get("status") != "live"
+
+
 def render_stream_badge(stream):
-    if stream["is_live"]:
+    status = stream.get("status")
+    if status is None:
+        # Legacy callers passed is_live only.
+        status = "live" if stream.get("is_live") else "past"
+    if status == "live":
         return C.LIVE
-    hrs = stream.get("hours_ago", 9999)
-    if hrs < 1:
-        label = "just now"
-    elif hrs < 2:
-        label = "1 hr ago"
+    if status == "upcoming":
+        return c(C.YELLOW, "⏰")
+    if status == "past":
+        return C.RECENT
+    return c(C.DIM, "·")
+
+
+def format_stream_row(stream):
+    status = stream.get("status")
+    if status == "live":
+        meta = stream.get("viewers_text") or ""
+    elif status == "upcoming":
+        meta = stream.get("schedule_text") or ""
     else:
-        label = f"{int(hrs)} hrs ago"
-    return f"{C.RECENT} {c(C.YELLOW, label)}"
+        meta = stream.get("streamed_text") or ""
+    tail = f"  {c(C.DIM, meta)}" if meta else ""
+    return f"{render_stream_badge(stream)}  {stream['title']}{tail}"
 
 
 def render_header(subtitle="", now_playing=None):
@@ -3529,15 +4334,19 @@ def pick_stream(streams, source_name, ui):
         if action == "r":
             return "retry"
         return None
-    lines = []
-    for stream in streams:
-        badge = render_stream_badge(stream)
-        views = f"  {c(C.DIM, '👥 ' + stream['view_count'])}" if stream["view_count"] else ""
-        lines.append(f"{badge}  {stream['title']}{views}")
+    lines = [format_stream_row(stream) for stream in streams]
+    live_count = sum(1 for stream in streams if stream.get("status") == "live")
+    upcoming_count = sum(1 for stream in streams if stream.get("status") == "upcoming")
+    if live_count:
+        summary = f"{live_count} live, {upcoming_count} upcoming"
+    elif upcoming_count:
+        summary = f"no live right now · {upcoming_count} upcoming"
+    else:
+        summary = "no live right now · replays below"
     idx = ui.pick(
         lines,
         "stream ❯ ",
-        f"{source_name} · {len(streams)} stream(s) found\n{'─' * 40}\nEsc → back",
+        f"{source_name} · {summary}\n{'─' * 40}\nEsc → back",
         "60%",
     )
     if idx is None:
@@ -3574,7 +4383,13 @@ def manage_sources_screen(cfg, ui):
         index_map = []
         for s in all_sources:
             status = c(C.GREEN, "●") if s["enabled"] else c(C.DIM, "○")
-            lines.append(f"{status}  {s['name']}  {c(C.DIM, '[' + s['id'] + ']')}")
+            binding = s.get("channel_name") or (
+                c(C.YELLOW, "⚠ no channel id") if not s.get("channel_id") else ""
+            )
+            lines.append(
+                f"{status}  {s['name']}  {c(C.DIM, '[' + s['id'] + ']')}"
+                + (f"  {c(C.DIM, binding)}" if binding else "")
+            )
             index_map.append(s)
         idx = ui.pick(lines, "source ❯ ", "Manage sources\n" + "─" * 44 + "\nEsc → back", "60%")
         if idx is None:
@@ -3584,21 +4399,74 @@ def manage_sources_screen(cfg, ui):
         toggle_label = "disable" if target["enabled"] else "enable"
         action = ui.action(
             [f"{'●' if target['enabled'] else '○'}  {target['name']}  [{target['id']}]", "─" * 44],
-            [(toggle_label, toggle_label), ("delete", "delete"), ("back", "back")],
+            [
+                (toggle_label, toggle_label),
+                ("verify channels", "verify"),
+                ("change binding", "rebind"),
+                ("remove", "remove"),
+                ("back", "back"),
+            ],
         )
         if action == "back":
             continue
-        if action == "delete":
+        if action == "verify":
+            report = verify_channels(cfg)
+            lines = []
+            for item in report:
+                dup = " (duplicate binding)" if item.get("duplicate") else ""
+                lines.append(
+                    f"{item['status']:<14} {item['name']} -> "
+                    f"{item.get('channel_title') or item.get('channel_id') or '-'}{dup}"
+                )
+            fixable = any(item["status"] in ("dead", "missing-id") for item in report)
+            ui.info(lines, wait=False)
+            if (
+                fixable
+                and ui.action(
+                    ["Apply safe fixes? (exact-name ids, confirmed dead)", "─" * 44],
+                    [("yes, apply", "yes"), ("no, report only", "no")],
+                )
+                == "yes"
+            ):
+                counts = apply_channel_fixes(cfg, report)
+                ui.info(
+                    [
+                        f"✓ bound {counts['bound']} · disabled {counts['disabled']}"
+                        f" · skipped {counts['skipped']}"
+                    ],
+                    wait=False,
+                )
+        elif action == "rebind":
+            ref = ui.query(
+                [
+                    f"Rebind {target['name']}",
+                    "─" * 44,
+                    "Enter @handle, channel URL, or UC...   Esc → back",
+                ]
+            )
+            if ref and ref.strip():
+                resolved = bind_channel(cfg, target["id"], ref.strip())
+                if resolved:
+                    ui.info(
+                        [
+                            f"✓ {target['name']} -> {resolved['channel_title']}",
+                            resolved["channel_id"],
+                        ],
+                        wait=False,
+                    )
+                else:
+                    ui.info(["⚠  Could not resolve that channel."], wait=False)
+        elif action == "remove":
             confirmed = (
                 ui.action(
-                    [f'Delete "{target["name"]}"?', "─" * 44],
-                    [("yes, delete", "yes"), ("no, keep", "no")],
+                    [f'Remove "{target["name"]}"?', "─" * 44],
+                    [("yes, remove", "yes"), ("no, keep", "no")],
                 )
                 == "yes"
             )
             if confirmed:
                 news_delete_source(cfg, target["id"])
-                ui.info([f"✓  Deleted {target['name']}"], wait=False)
+                ui.info([f"✓  Removed {target['name']}"], wait=False)
         elif action in ("enable", "disable"):
             news_toggle_source(cfg, target["id"], enable=(action == "enable"))
             ui.info([f"✓  {target['name']} is now {action}d"], wait=False)
@@ -3606,8 +4474,10 @@ def manage_sources_screen(cfg, ui):
     return load_news_cfg(load_config())[1]
 
 
-def run_news_mode(cfg, ui, stop, goodbye, on_esc="quit"):
+def run_news_mode(cfg, ui, stop, goodbye, on_esc="quit", initial_source=None):
     settings, sources = load_news_cfg(cfg)
+    single_source = bool(initial_source)
+    first_pass = True
     current_stream: list = [None]
     player = [settings["player"]]
 
@@ -3617,9 +4487,15 @@ def run_news_mode(cfg, ui, stop, goodbye, on_esc="quit"):
             p = detect_player()
         return p
 
-    def play_news(stream):
+    def play_news(stream, source_info=None):
         stop()
-        NOW_PLAYING[0] = {"title": stream["title"], "replay": lambda: play_news(stream)}
+        kind = "channel" if (source_info or {}).get("channel_id") else "video"
+        NOW_PLAYING[0] = {
+            "title": stream["title"],
+            "kind": kind,
+            "pausable": stream_pausable(stream),
+            "replay": lambda: play_news(stream, source_info),
+        }
         clear_screen()
         pl = resolve_player()
         direct_url = None
@@ -3641,12 +4517,25 @@ def run_news_mode(cfg, ui, stop, goodbye, on_esc="quit"):
         IPC_DONE[0] = done
         threading.Thread(target=_ipc_watch, args=(stream["title"], done), daemon=True).start()
         add_to_history(
-            {"title": stream["title"], "url": stream["url"], "uploader": stream["source"]},
+            {
+                "title": stream["title"],
+                "url": stream["url"],
+                "uploader": stream["source"],
+                "kind": kind,
+                "channel_id": (source_info or {}).get("channel_id", ""),
+            },
             cfg["history_size"],
         )
 
     while True:
-        result = pick_source(sources, ui)
+        if first_pass and initial_source:
+            first_pass = False
+            if initial_source not in sources:
+                ui.info([f"❌ Unknown source: {initial_source}"])
+                return
+            result = (initial_source, sources[initial_source])
+        else:
+            result = pick_source(sources, ui)
 
         if result is None:
             if on_esc == "home":
@@ -3666,6 +4555,7 @@ def run_news_mode(cfg, ui, stop, goodbye, on_esc="quit"):
                     "title": it["title"],
                     "url": it["url"],
                     "source": it.get("uploader") or "URL",
+                    "status": "live" if it.get("is_live") else "past",
                     "is_live": bool(it.get("is_live")),
                     "view_count": "",
                 }
@@ -3682,10 +4572,12 @@ def run_news_mode(cfg, ui, stop, goodbye, on_esc="quit"):
                             f"   {c(C.DIM, 'Source')}  : {st['source']}",
                             "─" * 44,
                         ],
-                        PLAY_ACTIONS_NEWS,
+                        with_pause(PLAY_ACTIONS_NEWS, not st.get("is_live")),
                     )
                     if action == "r":
                         play_news(st)
+                    elif action == "u":
+                        toggle_pause()
                     elif action == "k":
                         save_current(
                             cfg,
@@ -3733,23 +4625,44 @@ def run_news_mode(cfg, ui, stop, goodbye, on_esc="quit"):
             is_search_result = False
 
         while True:
+            go_back_to_main = False
             clear_screen()
             sp = Spinner("Scanning for live streams...")
             sp.start()
-            cached_streams = search_youtube(
-                source_info["name"],
-                source_info["keywords"],
-                source_info.get("channel_id"),
-                settings["timeout"],
-                settings["recent_hours"],
-            )
+            channel_id = source_info.get("channel_id") or ""
+            try:
+                if is_search_result:
+                    cached_streams = search_live(
+                        source_info["name"],
+                        settings["timeout"],
+                        True,
+                        settings["recent_hours"],
+                    )
+                elif not channel_id:
+                    raise ChannelError("needs repair: run --news --verify, then rebind this source")
+                else:
+                    cached_streams = channel_lives(channel_id, settings["timeout"])
+                    cached_streams = [
+                        item
+                        for item in cached_streams
+                        if item.get("status") != "past"
+                        or item.get("hours_ago", 9999) <= settings["recent_hours"]
+                    ]
+            except ChannelError as exc:
+                sp.fail(str(exc))
+                action = ui.action(
+                    [f"⚠  {source_info.get('name', 'source')}: {exc}", "─" * 44],
+                    [("retry", "r"), ("back", "b")],
+                )
+                if action == "r":
+                    continue
+                go_back_to_main = True
+                break
             if cached_streams:
                 sp.done(f"Found {len(cached_streams)} stream(s)")
             else:
                 sp.fail("No streams found")
             print()
-
-            go_back_to_main = False
 
             while True:
                 result = pick_stream(cached_streams, source_info["name"], ui)
@@ -3762,20 +4675,32 @@ def run_news_mode(cfg, ui, stop, goodbye, on_esc="quit"):
                     continue
 
                 chosen = result
+                if not stream_is_playable(chosen):
+                    ui.info(
+                        [
+                            f"⏰  {chosen['title']}",
+                            chosen.get("schedule_text") or "not started yet",
+                            channel_streams_url(channel_id) if channel_id else "",
+                            "Not playing: this stream has not started.",
+                        ],
+                        wait=False,
+                    )
+                    time.sleep(0.8)
+                    continue
                 pl = resolve_player()
                 if not pl:
                     ui.info(["❌ No player found (mpv / vlc / ffplay)."])
                     go_back_to_main = True
                     break
 
-                play_news(chosen)
+                play_news(chosen, source_info)
 
                 go_to_main_from_playing = False
                 refetch_from_playing = False
 
                 while True:
                     stream = current_stream[0]
-                    status = C.LIVE if stream["is_live"] else render_stream_badge(stream)
+                    status = render_stream_badge(stream)
                     header_lines = [
                         f"▶  {c(C.BOLD, stream['title'])}",
                         f"   {c(C.DIM, 'Source')}  : {stream['source']}",
@@ -3787,12 +4712,9 @@ def run_news_mode(cfg, ui, stop, goodbye, on_esc="quit"):
                         header_lines.append(
                             f"   {c(C.YELLOW, '⚠  Player exited: stream may have ended.')}"
                         )
-                    actions = (
-                        PLAY_ACTIONS_NEWS
-                        if is_search_result
-                        else [a for a in PLAY_ACTIONS_NEWS if a[1] != "k"]
+                    action = ui.action(
+                        header_lines, with_pause(PLAY_ACTIONS_NEWS, stream_pausable(stream))
                     )
-                    action = ui.action(header_lines, actions)
 
                     if action == "o":
                         break  # stream list, player keeps playing
@@ -3802,6 +4724,8 @@ def run_news_mode(cfg, ui, stop, goodbye, on_esc="quit"):
                         run_history_screen(cfg, ui, stop, _search_play_default(cfg))
                     elif action == "r":
                         play_news(stream)
+                    elif action == "u":
+                        toggle_pause()
                     elif action == "f":
                         stop()
                         refetch_from_playing = True
@@ -3822,7 +4746,10 @@ def run_news_mode(cfg, ui, stop, goodbye, on_esc="quit"):
                                 "title": stream["title"],
                                 "url": stream["url"],
                                 "uploader": stream.get("source"),
+                                "kind": "channel" if source_info.get("channel_id") else "video",
                                 "channel_id": source_info.get("channel_id"),
+                                "channel_name": source_info.get("channel_name")
+                                or source_info.get("name"),
                                 "keywords": source_info.get("keywords"),
                                 "fallback_url": source_info.get("fallback_url"),
                             },
@@ -3854,6 +4781,8 @@ def run_news_mode(cfg, ui, stop, goodbye, on_esc="quit"):
                     break
 
             if go_back_to_main:
+                if single_source:
+                    return
                 break
 
 
@@ -3897,8 +4826,11 @@ CONFIG: {CONFIG_PATH}
 USAGE:
     yt-cli                         Main menu
     yt-cli --news / -n            Interactive TUI mode (news)
-    yt-cli --news <source> [player]  Play directly (CLI mode)
+    yt-cli --news <source> [player] [--replay]  Play the channel's live
     yt-cli --news --list
+    yt-cli --news --verify [--apply] [--json]
+    yt-cli --news --add <name> [@handle|UC...|url]
+    yt-cli --news --bind <source-id> <@handle|UC...|url>
     yt-cli --news --config
     yt-cli --news --help
 
@@ -3909,9 +4841,14 @@ SUPPORTED SOURCES:""")
 PLAYERS:
     auto  mpv  vlc  ffplay
 
+CHANNEL BEHAVIOR:
+    A source is a YouTube channel. It plays that channel's current live.
+    If nothing is live, it lists live/upcoming/replays and plays nothing
+    unless you pass --replay.
+
 EXAMPLES:
-    yt-cli --news
-    yt-cli --news tv-patrol
+    yt-cli --news news5everywhere
+    yt-cli --news news5everywhere --replay
     yt-cli --news 24-oras vlc
 """)
 
@@ -4109,12 +5046,59 @@ def _news_cli_main():
         edit_news_config()
         sys.exit(0)
 
+    if args[0] == "--verify":
+        report = verify_channels(cfg)
+        if "--json" in args:
+            print(json.dumps(report, indent=2))
+            sys.exit(0)
+        for item in report:
+            dup = " (duplicate binding)" if item.get("duplicate") else ""
+            bound = item.get("channel_title") or item.get("channel_id") or "-"
+            label = item.get("name") or item.get("id")
+            print(f"  {item['status']:<14} {label:<24} -> {bound}{dup}")
+            if item.get("error"):
+                print(f"                 {item['error']}")
+        if "--apply" in args:
+            counts = apply_channel_fixes(cfg, report)
+            print(
+                f"\n✅ bound {counts['bound']} · disabled {counts['disabled']}"
+                f" · skipped {counts['skipped']}"
+            )
+        sys.exit(0)
+
+    if args[0] == "--add":
+        if len(args) < 2:
+            print("❌ usage: yt-cli --news --add <name> [@handle|UC...|url]")
+            sys.exit(1)
+        name = args[1]
+        ref = args[2] if len(args) > 2 else name
+        added = add_channel(cfg, name, ref)
+        if not added:
+            print("❌ could not resolve that channel")
+            sys.exit(1)
+        print(f"✓ added [{added['id']}] -> {added['channel_title']} ({added['channel_id']})")
+        sys.exit(0)
+
+    if args[0] == "--bind":
+        if len(args) < 3:
+            print("❌ usage: yt-cli --news --bind <source-id> <@handle|UC...|url>")
+            sys.exit(1)
+        resolved = bind_channel(cfg, args[1], args[2])
+        if not resolved:
+            print("❌ could not resolve that channel")
+            sys.exit(1)
+        print(f"✓ {resolved['id']} -> {resolved['channel_title']} ({resolved['channel_id']})")
+        sys.exit(0)
+
     source_query = args[0].lower()
     player_override = None
     quality = settings["quality"]
+    allow_replay = False
     for arg in args[1:]:
         if arg.startswith("--quality="):
             quality = arg.split("=")[1]
+        elif arg in ("--replay", "-R", "-replay"):
+            allow_replay = True
         elif arg in ("mpv", "vlc", "ffplay", "auto"):
             player_override = arg
 
@@ -4135,18 +5119,40 @@ def _news_cli_main():
             print("Did you mean: " + ", ".join(suggestions[:4]))
         sys.exit(1)
 
-    print(f"\n📺 Searching for: {matched['name']}")
-    streams = search_youtube(
-        matched["name"],
-        matched["keywords"],
-        matched.get("channel_id"),
-        settings["timeout"],
-        settings["recent_hours"],
-    )
-    if not streams:
-        print(f"⚠️  No streams found. Try: {matched['fallback_url']}")
+    channel_id = matched.get("channel_id") or ""
+    if not channel_id:
+        print(f"⚠️  {matched['name']} has no channel id.")
+        print("    Run: yt-cli --news --verify")
+        sys.exit(1)
+
+    print(f"\n📺 {matched['name']}")
+    try:
+        items = channel_lives(channel_id, settings["timeout"])
+    except ChannelError as exc:
+        print(f"❌ {exc}")
+        print(f"   {channel_streams_url(channel_id)}")
+        sys.exit(1)
+
+    items = [
+        item
+        for item in items
+        if item.get("status") != "past" or item.get("hours_ago", 9999) <= settings["recent_hours"]
+    ]
+    live = [i for i in items if i.get("status") == "live"]
+    upcoming = [i for i in items if i.get("status") == "upcoming"]
+    past = [i for i in items if i.get("status") == "past"]
+    for item in live:
+        print(f"  ● LIVE  {(item.get('viewers_text') or ''):<16} {item['title']}")
+    for item in upcoming:
+        print(f"  ⏰       {(item.get('schedule_text') or ''):<16} {item['title']}")
+    for item in past[:5]:
+        print(f"  ↻        {(item.get('streamed_text') or ''):<16} {item['title']}")
+
+    stream = choose_cli_stream(items, allow_replay=allow_replay)
+    if not stream:
+        print("\n⚠️  No live stream right now. Use --replay to play the newest replay.")
         sys.exit(0)
-    stream = streams[0]
+
     direct_url = get_direct_stream_url(stream["url"], quality)
     player = player_override or settings["player"]
     play_stream_cli(stream["url"], player, quality, direct_url=direct_url)
@@ -4154,13 +5160,13 @@ def _news_cli_main():
 
 def print_stations_help(stations):
     print(f"""
-📻 STATIONS · Internet radio (radio-browser.info)
+📻 RADIO · Internet radio (radio-browser.info)
 
 CONFIG: {CONFIG_PATH}
 
 USAGE:
-    yt-cli --stations / -s              Stations TUI
-    yt-cli --stations <slug|url>        Play a saved station or stream URL
+    yt-cli --stations / -s              Radio TUI (legacy flag name)
+    yt-cli --stations <slug|url>        Play a saved radio station or stream URL
     yt-cli --stations --list
     yt-cli --stations --config
     yt-cli --stations --help
@@ -4169,7 +5175,7 @@ OPTIONS:
     --bg, --background     Run in background
     --fg, --foreground     Run in foreground
 
-SAVED STATIONS:""")
+SAVED RADIO:""")
     if not stations:
         print("    (none yet: search in the TUI and press k to keep)")
     for station in stations:
@@ -4192,9 +5198,9 @@ def run_stations_cli():
         sys.exit(0)
 
     if args[0] in ("--list", "-l", "list"):
-        print(f"\n{c(C.BOLD + C.CYAN, '📻  stations')}  ·  saved\n")
+        print(f"\n{c(C.BOLD + C.CYAN, '📻  radio')}  ·  saved\n")
         if not stations:
-            print(f"  {c(C.DIM, 'no saved stations yet')}")
+            print(f"  {c(C.DIM, 'no saved radio yet')}")
         for station in stations:
             status = "●" if station.get("enabled", True) else "○"
             bitrate = f"{station['bitrate']}k" if station.get("bitrate") else "-"
@@ -4244,17 +5250,17 @@ def _curses_main(stdscr, cfg, mode):
         _curses_ui_message(stdscr, ["Goodbye! 👋"])
 
     if mode in ("radio", "stations", "news"):
-        dest = {"radio": "Radio", "stations": "Stations", "news": "News"}[mode]
+        dest = {"radio": "Presets", "stations": "Radio", "news": "News"}[mode]
         _run_mode_loop(cfg, ui, dest, stop_shared, play_mpv, goodbye)
         return
 
     detached = False
     while True:
-        entries = ["Search", "Radio", "Stations", "News", "History"]
+        entries = ["Saved", "Search", "History"]
         if player_active():
             entries.insert(0, "▶ Now Playing")
         entries.append("Exit")
-        idx = ui.pick(entries, "main ❯ ", "yt-cli · search / radio / stations / news", "50%")
+        idx = ui.pick(entries, "main ❯ ", "yt-cli · saved / search / history", "50%")
         if idx is None:
             break
         choice = entries[idx]
@@ -4262,7 +5268,7 @@ def _curses_main(stdscr, cfg, mode):
             if player_active():
                 act = ui.action(
                     ["Player is still running.", "─" * 44],
-                    [("leave playing in background", "d"), ("stop player and exit", "s")],
+                    [("detach (keeps playing)", "d"), ("exit (stops player)", "s")],
                 )
                 if act == "d":
                     detached = True

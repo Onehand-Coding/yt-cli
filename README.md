@@ -1,74 +1,91 @@
 # yt-cli
 
-Unified YouTube **search / radio / news** player — a single-file, stdlib-only Python CLI.
+A terminal player for YouTube channels, YouTube presets, and internet radio.
+The application is Python standard library only. It uses `mpv`, `yt-dlp`, and
+`fzf`, with a curses fallback when `fzf` is not installed.
 
-Formerly three scripts (`yt-cli`, `tune`, `news-stream`), merged into one. Dispatch is by `argv[0]` / flags:
+[![CI](https://github.com/Onehand-Coding/yt-cli/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Onehand-Coding/yt-cli/actions/workflows/ci.yml)
 
-| Invocation | Mode |
-|---|---|
-| `yt-cli` | Main menu (Search / Radio / News / History) |
-| `yt-cli --radio` | Radio mode |
-| `yt-cli --news` | News mode |
-| `~/.local/bin/music/<preset>` | Radio preset (relative symlink → `../yt-cli`) |
+## Usage
+
+| Command | Opens |
+| --- | --- |
+| `yt-cli` | Saved / Search / History |
+| `yt-cli --radio` | Saved, filtered to YouTube presets |
+| `yt-cli --stations` | Saved, filtered to internet radio |
+| `yt-cli --news` | Saved, filtered to channels |
+| `~/.local/bin/music/<name>` | A saved preset or radio station |
+
+The flag names are historical. The UI calls internet radio **Radio** and YouTube
+presets **Presets**.
+
+## Channels
+
+A news source is a YouTube channel, not a stream link. Selecting a channel shows
+its current lives, scheduled streams, and recent replays. Stream IDs change
+daily; the channel does not.
+
+```bash
+yt-cli --news                            # channel list
+yt-cli --news news5everywhere            # top live, or print the list if none
+yt-cli --news news5everywhere --replay   # newest replay
+yt-cli --news --verify                   # report channel bindings
+yt-cli --news --verify --apply           # fill exact-name ids, disable 404s
+yt-cli --news --add "105.9 True FM"      # add a channel by exact title
+yt-cli --news --bind News5Everywhere @TV5NewsPH
+```
+
+`--verify` reports a label mismatch but does not rename the source or change a
+non-empty channel id. A confirmed 404 is disabled, not deleted. Timeouts are
+reported as `unknown`.
+
+## Install
+
+```bash
+ln -s "$PWD/yt-cli" ~/.local/bin/yt-cli
+```
+
+Runtime requirements: `mpv`, `yt-dlp`, and `fzf` (optional).
+
+Files live in `~/.config/yt-cli/`:
+
+- `config.json`: presets, radio stations, channels
+- `state.json`: player and video toggles
+- `resolve-cache.json`: direct URLs for replays
+- `history.json`: play history
 
 ## Layout
 
-```
-yt-cli              # executable wrapper (imports yt_cli; PATH symlink target)
-yt_cli.py           # the monolith — all app logic
-CONTEXT.md          # architecture, decisions, E2E gotchas
-docs/
-  plans/            # implementation plans
-  specs/            # design specs
-  backups/          # pre-merge tune/news-stream backups
-tests/
-  test_cli.py       # fast subprocess smoke tests (pytest)
-  e2e/              # pty E2E flows (not collected by pytest)
-    pty_harness.py
-    flow_a.py … flow_e.py
-    bin/            # fzf-free PATH sandbox for curses tests
+```text
+yt-cli                 launcher; the PATH symlink points here
+yt_cli.py              application code
+CONTEXT.md             architecture and decisions
+.github/workflows/     CI
+docs/specs/            design notes
+docs/plans/            implementation plans
+tests/                 unit and smoke tests
+tests/e2e/             pty flows (network and mpv required)
 ```
 
-## Run
+## Development
 
 ```bash
-# Via PATH (symlinked from ~/.local/bin)
-yt-cli
-yt-cli --radio
-yt-cli --news
-
-# Direct
-./yt-cli --radio lofi --no-video --loop
-python3 yt_cli.py --radio lofi   # note: top-level dispatch uses argv[0] name;
-                                 # a non-"yt-cli" name takes the preset branch
+uv sync --extra dev
+uv run --extra dev ruff check .
+uv run --extra dev pyright yt_cli.py
+uv run --extra dev pytest -q
 ```
 
-Requires: `mpv`, `yt-dlp`, `fzf` (curses fallback if fzf missing).
+CI runs the same checks on pushes to `main` and on pull requests.
 
-Config/state live in `~/.config/yt-cli/` (outside this repo).
-
-## Test
+The pty flows are not part of pytest. They require network access, `mpv`, and
+`fzf`:
 
 ```bash
-# Smoke tests (fast, no network)
-uv run --extra dev pytest
-
-# E2E flows (network + mpv; each takes 1–5 min)
-python3 tests/e2e/flow_a.py   # search/actions
-python3 tests/e2e/flow_b.py   # radio
-python3 tests/e2e/flow_c.py   # news
-python3 tests/e2e/flow_d.py   # curses (fzf-free PATH)
-python3 tests/e2e/flow_e.py   # save / navigation keys
+python3 tests/e2e/flow_a.py   # search and playback actions
+python3 tests/e2e/flow_b.py   # presets
+python3 tests/e2e/flow_c.py   # channels
+python3 tests/e2e/flow_d.py   # curses UI
+python3 tests/e2e/flow_e.py   # save and navigation
+python3 tests/e2e/flow_f.py   # radio with an isolated HOME (no network)
 ```
-
-See `CONTEXT.md` for architecture and harness gotchas.
-
-## Dotfiles
-
-The live entrypoint is a symlink:
-
-```
-~/.local/bin/yt-cli → ~/Coding/projects/yt-cli/yt-cli
-```
-
-Untracked from the bare dotfiles repo; ignored via `~/.gitignore`.

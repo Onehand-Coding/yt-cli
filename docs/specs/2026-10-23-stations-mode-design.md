@@ -41,7 +41,7 @@ model and API usage only. No Transistor code is copied.
 
 Add a separate `Stations` mode. The main menu becomes:
 
-```
+```text
 Search
 Radio        (YouTube mixes)
 Stations     (live internet radio)
@@ -107,7 +107,7 @@ standard library (`socket`, `urllib.request`, `urllib.parse`, `json`).
 
 Stations are live audio streams, so they use a dedicated command:
 
-```
+```text
 mpv --force-window=no --vid=no --video=no --audio-display=no <url>
 ```
 
@@ -120,7 +120,7 @@ the station player. Now Playing hides the video toggle for stations.
 
 Saved stations screen:
 
-```
+```text
 yt-cli · Stations
 ------------------------------------------------
   1.  Search stations...
@@ -134,7 +134,7 @@ type to filter saved · enter play · esc back
 - Search results use the same columns. Selecting one plays it immediately and
   opens the station action menu.
 - Station action menu: other results, new search, history, replay, go to,
-  stop, exit, keep (save), detach. No video or loop actions.
+  stop, exit, save, detach. No video or loop actions.
 - A pasted HTTP(S) URL, including `.m3u` and `.pls`, can be played and saved.
 - Saving offers an optional `music/<slug>` symlink, matching YouTube presets.
 - Manage stations supports enable, disable, and delete.
@@ -230,4 +230,4 @@ created under `~/.local/bin/music/`. Existing YouTube presets are untouched.
 ## References
 
 - Transistor (MIT): https://codeberg.org/y20k/transistor
-- radio-browser API: https://api.radio-browser.info/
+- radio-browser API: <https://api.radio-browser.info>/

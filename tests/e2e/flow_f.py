@@ -64,14 +64,17 @@ def main() -> int:
 
     h = Harness([YT_CLI], env=env, name="flow_f")
     try:
-        ok &= h.wait_for("search / radio / stations / news", 15)
-        h.send("3\r", 0.4)  # main menu: Search Radio Stations
-        ok &= h.wait_for("Stations", 8)
+        ok &= h.wait_for("saved / search / history", 15)
+        h.send("Saved\r", 0.4)
         ok &= h.wait_for("Jazz FM", 8)
-        ok &= h.wait_for("manage stations", 5)
+        ok &= h.wait_for("manage saved", 5)
         h.send("\x1b", 0.4)  # Esc → main menu
         ok &= h.wait_new("main ❯", 8)
-        h.send("x\r", 0.4)  # Exit
+        h.send("Exit\r", 0.4)
+        # A live player from another session adds the detach/exit prompt.
+        # Detach leaves it alone; do not stop someone else's playback.
+        if h.wait_new("Player is still running", 2):
+            h.send("d\r", 0.4)
         time.sleep(2)
         h.read(1)
         exited = h.done

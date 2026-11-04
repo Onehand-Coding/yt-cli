@@ -19,7 +19,7 @@ def flow_b():
     h.send("2\r", 0.4)
     ok &= h.wait_new("action ❯", 15)
     ok &= h.wait_new("playing", 90)
-    h.send("s\r", 0.4)
+    h.send("se\r", 0.4)
     ok &= h.wait_new("search ❯", 8)
     h.send("acdc thunderstruck\r", 0.02)
     ok &= h.wait_new("result ❯", 90)

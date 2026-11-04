@@ -14,7 +14,8 @@ def mpv_alive():
 def flow_d():
     h = Harness([YT_CLI], env={"PATH": NOFZF}, name="curses")
     ok = True
-    ok &= h.wait_new("search / radio / stations / news", 15)
+    ok &= h.wait_new("saved / search / history", 15)
+    h.send("j", 0.4)  # Saved -> Search
     h.send("\r", 0.4)
     # curses only emits the tail of a line sharing a prefix with the
     # previous frame, so the full "search YouTube" is not on the wire.
@@ -28,20 +29,20 @@ def flow_d():
     print(f"  {'[PASS]' if playing else '[FAIL]'} mpv running while action menu up")
     ok &= playing
     h.send("q", 0.4)
-    ok &= h.wait_new("search / radio / stations / news", 8)
+    ok &= h.wait_new("saved / search / history", 8)
     time.sleep(2)
     if mpv_alive():
         print("  [FAIL] mpv still running after q")
         ok = False
     else:
         print("  [PASS] mpv stopped after q")
-    for _ in range(4):            # Search, Radio, Stations, News -> History
+    for _ in range(2):            # Saved, Search -> History
         h.send("j", 0.05)
     h.send("\r", 0.4)
     ok &= h.wait_new("history", 8)
     h.send("q", 0.4)
-    ok &= h.wait_new("search / radio / stations / news", 8)
-    for _ in range(5):            # ... -> Exit
+    ok &= h.wait_new("saved / search / history", 8)
+    for _ in range(3):            # ... -> Exit
         h.send("j", 0.05)
     h.send("\r", 0.4)
     ok &= h.wait_new("Goodbye", 8)
