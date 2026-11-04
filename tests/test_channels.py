@@ -45,3 +45,29 @@ def test_sort_stream_items_live_then_upcoming_then_past():
 )
 def test_parse_ago_text(text, expected):
     assert yt_cli.parse_ago_text(text) == pytest.approx(expected)
+
+
+def test_channel_lives_returns_sorted(monkeypatch):
+    monkeypatch.setattr(yt_cli, "fetch_url", lambda url, timeout=15: "<html>")
+    monkeypatch.setattr(yt_cli, "extract_yt_initial_data", lambda html: _fixture())
+    items = yt_cli.channel_lives("UCGEbMwiX774cseKvJqF9R2g")
+    assert items[0]["status"] == "live"
+    assert items[-1]["status"] == "unknown"
+
+
+def test_channel_lives_404_is_a_channel_error(monkeypatch):
+    monkeypatch.setattr(yt_cli, "fetch_url", lambda url, timeout=15: "HTTP Error 404: Not Found")
+    with pytest.raises(yt_cli.ChannelError, match="404"):
+        yt_cli.channel_lives("UCdead")
+
+
+def test_channel_lives_without_id_is_a_channel_error():
+    with pytest.raises(yt_cli.ChannelError, match="no channel id"):
+        yt_cli.channel_lives("")
+
+
+def test_channel_lives_empty_page_is_a_channel_error(monkeypatch):
+    monkeypatch.setattr(yt_cli, "fetch_url", lambda url, timeout=15: "<html>")
+    monkeypatch.setattr(yt_cli, "extract_yt_initial_data", lambda html: {})
+    with pytest.raises(yt_cli.ChannelError, match="could not read"):
+        yt_cli.channel_lives("UCx")

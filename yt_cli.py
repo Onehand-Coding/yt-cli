@@ -3333,6 +3333,32 @@ def sort_stream_items(items):
     return live + upcoming + past + rest
 
 
+def channel_streams_url(channel_id):
+    return f"https://www.youtube.com/channel/{channel_id}/streams"
+
+
+def channel_lives(channel_id, timeout=15):
+    """The channel's own live/upcoming/replay list. Raises ChannelError.
+
+    Deliberately does not call any search: a channel source shows what the
+    channel is serving, never a YouTube-wide guess.
+    """
+    if not channel_id:
+        raise ChannelError("no channel id for this source")
+    html_content = fetch_url(channel_streams_url(channel_id), timeout=timeout)
+    if html_content.startswith(("Error", "HTTP")):
+        if "404" in html_content:
+            raise ChannelError("channel not found (404)")
+        raise ChannelError("could not fetch channel page")
+    data = extract_yt_initial_data(html_content)
+    if not data:
+        raise ChannelError("could not read channel page")
+    items = parse_lockup_videos(data)
+    if not items:
+        raise ChannelError("could not read channel page")
+    return sort_stream_items(items)
+
+
 def parse_video_renderer(video, keywords, channel_name, recent_hours=24):
     try:
         video_id = video.get("videoId", "")
