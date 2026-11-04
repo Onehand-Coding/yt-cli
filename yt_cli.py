@@ -443,9 +443,7 @@ def _parse_index(chosen):
     if chosen is None:
         return None
     # The number gutter may be right-aligned inside the dim escape.
-    m = re.match(r"^\x1b\[[^m]*m\s*(\d+)\.", chosen) or re.match(
-        r"^\s*(\d+)\.", chosen
-    )
+    m = re.match(r"^\x1b\[[^m]*m\s*(\d+)\.", chosen) or re.match(r"^\s*(\d+)\.", chosen)
     return int(m.group(1)) - 1 if m else None
 
 
@@ -2943,9 +2941,7 @@ def pick_station_results(results, query, ui):
         )
         return "retry" if action == "r" else None
     lines = [format_station_row(station) for station in results]
-    header = (
-        f"Radio · {c(C.BOLD, query)} ({len(results)})" + "\n" + "─" * 48 + "\n" + "Esc → back"
-    )
+    header = f"Radio · {c(C.BOLD, query)} ({len(results)})" + "\n" + "─" * 48 + "\n" + "Esc → back"
     idx = ui.pick(lines, "result ❯ ", header, "70%")
     if idx is None:
         return None
