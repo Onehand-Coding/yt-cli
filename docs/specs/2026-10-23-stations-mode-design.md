@@ -51,7 +51,7 @@ Exit
 ```
 
 Radio keeps its current behavior and presets. `go to...` gains a Stations
-destination. `--stations` mirrors the existing `--radio` CLI shape.
+destination. `--radio` mirrors the existing `--radio` CLI shape.
 
 ### Data storage
 
@@ -141,17 +141,17 @@ type to filter saved · enter play · esc back
 
 ### CLI
 
-- `yt-cli --stations` opens the TUI.
-- `yt-cli --stations --list` lists saved stations.
-- `yt-cli --stations <name>` plays a saved station by fuzzy slug/name match.
-- `yt-cli --stations <url>` plays a raw stream URL.
-- `yt-cli --stations --config` opens the config in `$EDITOR`.
-- `yt-cli --stations --help` prints usage.
+- `yt-cli --radio` opens the TUI.
+- `yt-cli --radio --list` lists saved stations.
+- `yt-cli --radio <name>` plays a saved station by fuzzy slug/name match.
+- `yt-cli --radio <url>` plays a raw stream URL.
+- `yt-cli --radio --config` opens the config in `$EDITOR`.
+- `yt-cli --radio --help` prints usage.
 - `music/<slug>` dispatch checks YouTube presets first, then saved stations.
 
 ### Dependencies
 
-`--stations` and station symlinks require `mpv` only. Search, Radio, News, and
+`--radio` and station symlinks require `mpv` only. Search, Radio, News, and
 the main menu still require `yt-dlp`.
 
 ### UI cleanup
@@ -210,7 +210,7 @@ Unit tests (`tests/test_stations.py`, importing `yt_cli` directly):
 - History routing for `kind: "station"`.
 - Symlink precedence: YouTube preset wins over a station with the same name.
 
-Smoke tests: `--stations --help` and `--stations --list`.
+Smoke tests: `--radio --help` and `--radio --list`.
 
 E2E (`tests/e2e/flow_f.py`):
 

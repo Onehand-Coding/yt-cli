@@ -8,7 +8,7 @@ from pty_harness import Harness
 YT_CLI = str(HERE.parents[1] / "yt-cli")
 
 def flow_c():
-    h = Harness([YT_CLI, "--news"], name="news")
+    h = Harness([YT_CLI, "--channels"], name="news")
     ok = True
     ok &= h.wait_new("source ❯", 15)
     h.send("news5everywhere\r", 0.4)

@@ -292,3 +292,31 @@ def test_playing_tables_have_back_and_no_other():
         assert "go to" in labels
         assert "←" not in labels
         assert not any(label.startswith("other ") for label in labels)
+
+
+def test_parse_cli_flags_accepts_mix():
+    flags, remaining = yt_cli.parse_cli_flags(["--mix"])
+    assert flags["radio"] is True
+    assert remaining == []
+    flags, remaining = yt_cli.parse_cli_flags(["--radio"])
+    assert flags == {}
+    assert remaining == ["--radio"]
+
+
+def test_preset_rows_align_category_column():
+    infos = [
+        {"name": "My Radio", "category": "Radio"},
+        {"name": "Avenged Sevenfold", "category": "Bands"},
+        {"name": "Lo-fi (Linkin-park)", "category": "Chill"},
+    ]
+    width = min(36, max(yt_cli.display_width(info["name"]) for info in infos))
+    rows = [yt_cli.format_preset_row(info, None, width) for info in infos]
+
+    def tag_column(row):
+        plain = yt_cli.strip_ansi(row)
+        return yt_cli.display_width(plain[: plain.index("[")])
+
+    assert len({tag_column(row) for row in rows}) == 1
+
+    playing = yt_cli.format_preset_row(infos[0], "My Radio", width)
+    assert tag_column(playing) == tag_column(rows[0])

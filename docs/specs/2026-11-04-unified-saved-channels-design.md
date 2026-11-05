@@ -285,9 +285,9 @@ existing `manage_presets_screen`, `manage_stations_screen`, and
 `manage_sources_screen`.
 
 Filters are passed in, not navigated to: `--radio` opens Saved filtered to
-presets, `--stations` to stations, `--news` to channels. Direct-play forms
-(`--radio lofi`, `--stations <slug>`, `--news <channel>`) keep working, with
-one honesty rule: `--news <channel>` plays the top live if there is one, and
+presets, `--stations` to stations, `--channels` to channels. Direct-play forms
+(`--radio lofi`, `--stations <slug>`, `--channels <channel>`) keep working, with
+one honesty rule: `--channels <channel>` plays the top live if there is one, and
 otherwise prints the live/upcoming/replay table and exits without playing.
 `--replay` opts in to the newest replay. The CLI has no chrome to warn you, so
 it must not silently hand you yesterday's broadcast.
@@ -341,9 +341,9 @@ the report; both rows show the same live list. Merging is a manual choice.
 
 Surfaces:
 
-- `yt-cli --news --verify` prints the report; `--apply` writes the safe subset:
+- `yt-cli --channels --verify` prints the report; `--apply` writes the safe subset:
   exact-match ids for `missing-id`, disable for confirmed `dead`. Nothing else.
-- `--news --verify --json` for scripting.
+- `--channels --verify --json` for scripting.
 - Manage saved → Channels shows per-entry status and offers repair and rebind.
 
 This is the only migration-shaped action. It may rewrite `channel_id`, fill an
@@ -388,7 +388,7 @@ already fixed.
   never applied. Disabling is reversible.
 - Upcoming rows are informational and never play. Replays honor
   `news.recent_hours` and the header says so.
-- `--news <channel>` refuses to play a replay unless `--replay` is passed.
+- `--channels <channel>` refuses to play a replay unless `--replay` is passed.
 
 ## What is left to the builder
 
@@ -432,7 +432,7 @@ already fixed.
 
 ## Implementation notes (2026-11-04)
 
-- `--news --add` was added; `--apply` cannot create entries.
+- `--channels --add` was added; `--apply` cannot create entries.
 - `--bind` and `--apply` resolve a plain name with an exact channel-title search.
 - The four daily channels were bound. True FM was not added by default.
 - CI lives in `.github/workflows/ci.yml`; pyright is a dev dependency.
