@@ -4,7 +4,7 @@
 
 **Goal:** Make a saved news channel resolve to that channel's current live shows, and put all saved things (channels, stations, presets) behind one Saved screen.
 
-**Architecture:** Keep the single-file `yt_cli.py` and the existing playback engines. Replace the dead `videoRenderer` channel parser with a `lockupViewModel` parser, split channel resolution from global search, and add a normalized saved-item adapter plus one dispatcher. Modes remain as filters over the saved catalog; `--radio`, `--stations`, `--news`, and the `music/` symlinks keep working.
+**Architecture:** Keep the single-file `yt_cli.py` and the existing playback engines. Replace the dead `videoRenderer` channel parser with a `lockupViewModel` parser, split channel resolution from global search, and add a normalized saved-item adapter plus one dispatcher. Modes remain as filters over the saved catalog; `--presets`, `--radio`, `--channels`, and the `music/` symlinks keep working.
 
 **Tech Stack:** Python 3.10+ stdlib only, pytest, fzf/curses UI abstraction, mpv/yt-dlp.
 
@@ -644,7 +644,7 @@ git commit -m "Allow direct entry into radio, station, and channel playback"
   - `pick_saved(items, ui) -> dict | ("manage", None) | ("search", str) | ("url", str) | None`.
   - `run_saved_mode(cfg, ui, kind=None, stop=stop_shared, goodbye=None, on_esc="quit")`.
 - Main menu: `Saved / Search / History / Exit` plus `▶ Now Playing`.
-- `--radio` → `run_saved_mode(kind="preset")`; `--stations` → `kind="station"`; `--news` → `kind="channel"`.
+- `--presets` → `run_saved_mode(kind="preset")`; `--radio` → `kind="station"`; `--channels` → `kind="channel"`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -810,31 +810,31 @@ git commit -m "Tag channel history entries"
 **Files:**
 - Modify: `tests/e2e/flow_a.py`, `flow_b.py`, `flow_c.py`, `flow_d.py`, `flow_e.py`, `flow_f.py`
 - Modify: `README.md`, `CONTEXT.md`
-- Data: the live config at `~/.config/yt-cli/config.json` (manual, via `yt-cli --news --verify --apply` plus rebinds)
+- Data: the live config at `~/.config/yt-cli/config.json` (manual, via `yt-cli --channels --verify --apply` plus rebinds)
 
 - [ ] **Step 1: Apply the verified bindings**
 
 Run each, confirming the printed mapping:
 
 ```bash
-yt-cli --news --bind news5everywhere UCGEbMwiX774cseKvJqF9R2g
-yt-cli --news --bind kapamilya-online-live UCstEtN0pgOmCf02EdXsGChw
-yt-cli --news --bind kapuso-online-live UCKL5hAuzgFQsyrsQKgU0Qng
-yt-cli --news --bind kapatid-live-stream UCiFx0kZFjR29u0uJxTSq5MQ
+yt-cli --channels --bind news5everywhere UCGEbMwiX774cseKvJqF9R2g
+yt-cli --channels --bind kapamilya-online-live UCstEtN0pgOmCf02EdXsGChw
+yt-cli --channels --bind kapuso-online-live UCKL5hAuzgFQsyrsQKgU0Qng
+yt-cli --channels --bind kapatid-live-stream UCiFx0kZFjR29u0uJxTSq5MQ
 ```
 
 True FM is optional and added only if the user asks:
 
 ```bash
-yt-cli --news --add "105.9 True FM" UCjUrQJqEIfO1e52faNzt04g
+yt-cli --channels --add "105.9 True FM" UCjUrQJqEIfO1e52faNzt04g
 ```
 
 - [ ] **Step 2: Verify honest behavior**
 
-Run: `yt-cli --news news5everywhere` while nothing is live.
+Run: `yt-cli --channels news5everywhere` while nothing is live.
 Expected: prints the current live/upcoming/replay table, launches nothing, exit 0.
 
-Run: `yt-cli --news news5everywhere --replay`.
+Run: `yt-cli --channels news5everywhere --replay`.
 Expected: plays the newest replay.
 
 - [ ] **Step 3: Update E2E flows**
