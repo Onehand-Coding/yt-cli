@@ -1809,14 +1809,18 @@ def build_mpv_cmd(url, settings, preset_overrides=None):
 
 
 def mpv_ipc_set_vid(show):
-    """Toggle mpv's video output (and its window) live. Returns True on
-    success. Both video= and vid= must be set: video=no suppresses output
-    entirely, vid=no deselects the track. Retries before giving up — a
-    transient IPC hiccup must not trigger a full player restart."""
+    """Toggle mpv's video track and window live. Returns True on success.
+    `vid` is the only property involved: mpv lists `--video` as an alias for
+    it, so setting both only repeated the same call. Selecting a track makes
+    mpv bring its video output (and window) back; clearing it does not close
+    the window on its own, because mpv.conf `force-window=yes` keeps an empty
+    one alive. Hiding therefore clears force-window as well. Retries before
+    giving up: a transient IPC hiccup must not trigger a full restart."""
     for attempt in range(3):
         try:
-            ipc_rpc(["set", "video", "auto" if show else "no"])
             ipc_rpc(["set", "vid", "auto" if show else "no"])
+            if not show:
+                ipc_rpc(["set", "force-window", "no"])
             return True
         except (OSError, ValueError, RuntimeError):
             if attempt == 2:
@@ -4389,12 +4393,19 @@ def launch_news_player(url, player, quality="720", direct_url=None):
     mpv gets the watch URL (yt-dlp handles YouTube live properly);
     other players get the pre-resolved direct URL."""
     if player == "mpv":
+        # Same explicit overrides as build_mpv_cmd: a global mpv.conf with
+        # force-window=yes would otherwise keep an empty window open, and
+        # video=no would ignore the toggle state. This also makes the
+        # toggle's "restart playback" fallback honor what was toggled.
+        no_video = load_state().get("radio", {}).get("no_video", False)
         cmd = [
             "mpv",
             "--really-quiet",
+            "--force-window=no",
             f"--ytdl-format=best[height<={quality}]/best",
-            url,
         ]
+        cmd += ["--vid=no", "--video=no"] if no_video else ["--vid=auto", "--video=auto"]
+        cmd.append(url)
     else:
         target = direct_url or url
         if player == "vlc":
