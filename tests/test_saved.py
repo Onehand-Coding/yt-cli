@@ -289,5 +289,6 @@ def test_playing_tables_have_back_and_no_other():
     ]
     for table in tables:
         labels = [label for label, _ in table]
-        assert "←" in labels
+        assert "go to" in labels
+        assert "←" not in labels
         assert not any(label.startswith("other ") for label in labels)

@@ -306,10 +306,10 @@ Spec: `docs/specs/2026-11-04-unified-saved-channels-design.md`.
 - **Names:** internet radio is Radio (`[radio]`, manage then Radio); YouTube presets
   are Presets. Legacy flags: `--radio` opens presets, `--stations` opens radio.
 - **Playing screen:** one shared menu for search, presets, radio, channels, and Now
-  Playing. Esc or the `←` row returns to the parent list and keeps playback; `stop` stops and
+  Playing. Esc returns to the parent list and keeps playback; `stop` stops and
   returns there; `detach` exits and leaves the player running; `exit` stops and exits.
   `pause`/`play` appears for VOD, replays, search results, and presets, and is hidden for
-  live news and radio. The first row is an arrow, not the word "back". Refresh streams is
+  live news and radio. There is no back row; Esc backs out. The first row is `go to`. Refresh streams is
   a row on the live list, not a playing action. `save` is hidden when the channel, preset, or station is
   already saved; `channel` reopens the channel from Now Playing. Exit or Esc at main
   closes the UI and leaves playback running; the header says so when a player is active.

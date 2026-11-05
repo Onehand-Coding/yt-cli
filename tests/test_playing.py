@@ -167,7 +167,7 @@ def test_now_playing_saved_channel_hides_save(monkeypatch):
     )
     yt_cli.now_playing_screen({"news": {"sources": []}}, ui)
     labels = [label for label, _ in ui.actions[0]]
-    assert "←" in labels
+    assert "go to" in labels
     assert "channel" in labels
     assert "save" not in labels
     assert "stop" in labels
@@ -175,7 +175,7 @@ def test_now_playing_saved_channel_hides_save(monkeypatch):
     assert "exit" in labels
 
 
-def test_playing_tables_start_at_back_and_end_at_exit():
+def test_playing_tables_start_at_go_to_and_end_at_exit():
     tables = [
         yt_cli.PLAY_ACTIONS_SEARCH,
         yt_cli.PLAY_ACTIONS_RADIO,
@@ -184,11 +184,11 @@ def test_playing_tables_start_at_back_and_end_at_exit():
     ]
     for table in tables:
         labels = [label for label, _ in table]
-        assert labels[0] == "←"
+        assert labels[0] == "go to"
         assert labels[-3:] == ["stop", "detach", "exit"]
 
     search = [label for label, _ in yt_cli.PLAY_ACTIONS_SEARCH]
-    assert search[1:5] == ["go to…", "history", "new search", "replay"]
+    assert search[:4] == ["go to", "history", "new search", "replay"]
 
 
 def test_pick_stream_refresh_row_maps_to_retry():

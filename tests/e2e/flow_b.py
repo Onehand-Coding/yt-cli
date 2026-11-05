@@ -14,9 +14,9 @@ def flow_b():
     h.send("1\r", 0.4)
     ok &= h.wait_new("action ❯", 15)
     ok &= h.wait_new("playing", 90)
-    h.send("\r", 0.4)
-    time.sleep(1.5)  # let the next fzf consume the cursor-position reply
-    ok &= h.wait_new("preset ❯", 8)
+    time.sleep(1.0)
+    h.send("\x1b", 0.6)
+    ok &= h.wait_for("preset ❯", 8)
     h.send("2\r", 0.4)
     ok &= h.wait_new("action ❯", 15)
     ok &= h.wait_new("playing", 90)

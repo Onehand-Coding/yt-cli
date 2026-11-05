@@ -1259,8 +1259,7 @@ def with_pause(actions, pausable=True):
 # ---------- unified action tables ----------
 
 PLAY_ACTIONS_SEARCH = [
-    ("←", "b"),
-    ("go to…", "g"),
+    ("go to", "g"),
     ("history", "h"),
     ("new search", "s"),
     ("replay", "r"),
@@ -1272,8 +1271,7 @@ PLAY_ACTIONS_SEARCH = [
 ]
 
 PLAY_ACTIONS_RADIO = [
-    ("←", "b"),
-    ("go to…", "g"),
+    ("go to", "g"),
     ("history", "h"),
     ("search", "s"),
     ("replay", "r"),
@@ -1287,8 +1285,7 @@ PLAY_ACTIONS_RADIO = [
 ]
 
 PLAY_ACTIONS_NEWS = [
-    ("←", "b"),
-    ("go to…", "g"),
+    ("go to", "g"),
     ("history", "h"),
     ("search", "s"),
     ("replay", "r"),
@@ -1461,7 +1458,7 @@ def now_playing_screen(cfg, ui):
     def actions():
         current = NOW_PLAYING[0] or {}
         kind = current.get("kind") or "video"
-        rows = [("←", "b"), ("go to…", "g")]
+        rows = [("go to", "g")]
         channel_id = current.get("channel_id")
         if channel_id and (
             current.get("source_id") or source_id_for_channel(cfg, channel_id)
@@ -3205,8 +3202,7 @@ def manage_stations_screen(cfg, ui):
 
 
 PLAY_ACTIONS_STATION = [
-    ("←", "b"),
-    ("go to…", "g"),
+    ("go to", "g"),
     ("history", "h"),
     ("new search", "s"),
     ("replay", "r"),

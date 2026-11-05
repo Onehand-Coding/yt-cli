@@ -43,7 +43,7 @@ reported as `unknown`.
 
 The action menu is shared by search, presets, radio, channels, and Now Playing.
 
-- `Esc` or the `←` row: return to the previous list, keep playing.
+- `Esc`: return to the previous list, keep playing.
 - `stop`: stop playback and return to the list.
 - `detach`: exit and keep playing.
 - `exit`: stop and exit.
