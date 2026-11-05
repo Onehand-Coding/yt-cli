@@ -57,17 +57,19 @@ Refresh streams is a row on the live list, not an action on the playing screen.
 ## Install
 
 ```bash
-uv tool install git+https://github.com/Onehand-Coding/yt-cli
+uv tool install yt-cli-player
 yt-cli --version
 ```
 
 Without `uv`, install it first:
 `curl -LsSf https://astral.sh/uv/install.sh | sh`. To try yt-cli without
-installing: `uvx --from git+https://github.com/Onehand-Coding/yt-cli yt-cli`.
-Upgrade with `uv tool upgrade yt-cli-player`.
+installing: `uvx --from yt-cli-player yt-cli`. Upgrade with
+`uv tool upgrade yt-cli-player`.
 
-The PyPI distribution is `yt-cli-player` (`yt-cli` was too similar to an
-existing project); the command it installs is `yt-cli`.
+The package is `yt-cli-player` (PyPI rejected `yt-cli` as too similar to an
+existing project); the command it installs is `yt-cli`. To run the tip of
+`main` instead of a release:
+`uv tool install git+https://github.com/Onehand-Coding/yt-cli`.
 
 Runtime requirements: `mpv`, `yt-dlp`, and `fzf` (optional). If `mpv` or
 `yt-dlp` is missing, the first run names the packages to install for apt, dnf,
