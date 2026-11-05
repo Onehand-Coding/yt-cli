@@ -494,7 +494,7 @@ class FzfUI:
             + c(C.DIM, "Esc → back   ·   q stop")
             + "\n"
             + "─" * 44,
-            height="55%",
+            height="70%",
             capture_query=True,
         )  # type: ignore[misc]
         if escaped:
