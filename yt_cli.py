@@ -1102,6 +1102,7 @@ def run_search_mode(
 
     while True:
         if item is not None:
+
             def search_header():
                 assert item is not None
                 lines = [
@@ -1142,6 +1143,19 @@ def run_search_mode(
                     return "search"
                 return None
 
+            def search_actions():
+                assert item is not None
+                if saved_item(
+                    cfg,
+                    {
+                        "kind": item.get("kind") or "video",
+                        "url": item.get("url", ""),
+                        "channel_id": item.get("channel_id", ""),
+                    },
+                ):
+                    return [a for a in PLAY_ACTIONS_SEARCH if a[1] != "k"]
+                return PLAY_ACTIONS_SEARCH
+
             def search_goodbye():
                 stop()
                 print(f"\n  {c(C.DIM, 'Goodbye!')}\n")
@@ -1149,7 +1163,7 @@ def run_search_mode(
             result = playing_menu(
                 ui,
                 search_header,
-                lambda: PLAY_ACTIONS_SEARCH,
+                search_actions,
                 lambda: True,
                 search_handle,
                 stop,
@@ -1460,9 +1474,7 @@ def now_playing_screen(cfg, ui):
         kind = current.get("kind") or "video"
         rows = [("go to", "g")]
         channel_id = current.get("channel_id")
-        if channel_id and (
-            current.get("source_id") or source_id_for_channel(cfg, channel_id)
-        ):
+        if channel_id and (current.get("source_id") or source_id_for_channel(cfg, channel_id)):
             rows.append(("channel", "c"))
         rows.append(("replay", "r"))
         if kind != "station":
@@ -2546,6 +2558,8 @@ def run_radio_mode(cfg, ui, stop, play_mpv, goodbye, on_esc="quit", initial_slug
         slug, info = result
         play_radio(info)
         radio_playing_loop(cfg, ui, info, settings, stop, play_radio, goodbye)
+        cfg = load_config()
+        settings, presets = load_radio_cfg(cfg)
 
 
 def radio_playing_loop(cfg, ui, info, settings, stop_fn, play_fn, goodbye_fn):
@@ -3410,10 +3424,7 @@ def saved_item(cfg, item):
             isinstance(station, dict) and station.get("url") == url
             for station in cfg.get("stations") or []
         )
-    return any(
-        preset.get("url") == url
-        for preset in (cfg.get("radio") or {}).get("presets") or []
-    )
+    return any(preset.get("url") == url for preset in (cfg.get("radio") or {}).get("presets") or [])
 
 
 def source_id_for_channel(cfg, channel_id):
@@ -4637,8 +4648,7 @@ def run_news_mode(cfg, ui, stop, goodbye, on_esc="quit", initial_source=None):
         NOW_PLAYING[0] = {
             "title": stream["title"],
             "source": stream.get("source") or "YouTube",
-            "status": stream.get("status")
-            or ("live" if stream.get("is_live") else "past"),
+            "status": stream.get("status") or ("live" if stream.get("is_live") else "past"),
             "kind": kind,
             "pausable": stream_pausable(stream),
             "channel_id": (source_info or {}).get("channel_id", ""),
@@ -4727,7 +4737,11 @@ def run_news_mode(cfg, ui, stop, goodbye, on_esc="quit", initial_source=None):
                     return lines
 
                 def url_actions():
-                    return [a for a in PLAY_ACTIONS_NEWS if a[1] != "f"]
+                    current = current_stream[0]
+                    actions = [a for a in PLAY_ACTIONS_NEWS if a[1] != "f"]
+                    if saved_item(cfg, {"kind": "video", "url": current.get("url", "")}):
+                        actions = [a for a in actions if a[1] != "k"]
+                    return actions
 
                 def url_handle(action):
                     st = current_stream[0]
@@ -5120,7 +5134,10 @@ def _radio_cli_main():
     args = sys.argv[1:]
 
     if not args:
-        run_fzf(cfg, mode="radio")
+        if find_fzf():
+            run_fzf(cfg, mode="radio")
+        else:
+            run_curses(cfg, mode="radio")
         return
 
     if args[0] in ("--help", "-h", "help"):
@@ -5171,7 +5188,10 @@ def _news_cli_main():
     args = sys.argv[1:]
 
     if not args:
-        run_fzf(cfg, mode="news")
+        if find_fzf():
+            run_fzf(cfg, mode="news")
+        else:
+            run_curses(cfg, mode="news")
         return
 
     if args[0] in ("--help", "-h", "help"):
@@ -5335,7 +5355,10 @@ def run_stations_cli():
     args = sys.argv[1:]
 
     if not args:
-        run_fzf(cfg, mode="stations")
+        if find_fzf():
+            run_fzf(cfg, mode="stations")
+        else:
+            run_curses(cfg, mode="stations")
         return
 
     if args[0] in ("--help", "-h", "help"):
