@@ -51,6 +51,9 @@ The action menu is shared by search, presets, radio, channels, and Now Playing.
 - `channel`: reopen the channel from Now Playing.
 - `save`: hidden when the channel is already saved.
 
+Exit or Esc at the main menu closes the UI and leaves the player running. Use `stop`
+from Now Playing to end playback.
+
 Refresh streams is a row on the live list, not an action on the playing screen.
 
 ## Install

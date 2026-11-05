@@ -71,10 +71,6 @@ def main() -> int:
         h.send("\x1b", 0.4)  # Esc → main menu
         ok &= h.wait_new("main ❯", 8)
         h.send("Exit\r", 0.4)
-        # A live player from another session adds the detach/exit prompt.
-        # Detach leaves it alone; do not stop someone else's playback.
-        if h.wait_new("Player is still running", 2):
-            h.send("d\r", 0.4)
         time.sleep(2)
         h.read(1)
         exited = h.done

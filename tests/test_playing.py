@@ -114,34 +114,6 @@ def test_playing_exit_goodbyes():
     assert calls == ["goodbye"]
 
 
-def test_exit_prompt_without_player_goodbyes(monkeypatch):
-    calls = []
-    monkeypatch.setattr(yt_cli, "player_active", lambda: False)
-    assert yt_cli.exit_prompt(FakeUI([]), lambda: calls.append("goodbye")) is True
-    assert calls == ["goodbye"]
-
-
-def test_exit_prompt_detach_keeps_player(monkeypatch):
-    calls = []
-    monkeypatch.setattr(yt_cli, "player_active", lambda: True)
-    assert yt_cli.exit_prompt(FakeUI(["d"]), lambda: calls.append("goodbye")) is True
-    assert calls == []
-
-
-def test_exit_prompt_stop_goodbyes(monkeypatch):
-    calls = []
-    monkeypatch.setattr(yt_cli, "player_active", lambda: True)
-    assert yt_cli.exit_prompt(FakeUI(["s"]), lambda: calls.append("goodbye")) is True
-    assert calls == ["goodbye"]
-
-
-def test_exit_prompt_cancel_stays(monkeypatch):
-    calls = []
-    monkeypatch.setattr(yt_cli, "player_active", lambda: True)
-    assert yt_cli.exit_prompt(FakeUI(["q"]), lambda: calls.append("goodbye")) is False
-    assert calls == []
-
-
 def test_source_id_for_channel():
     cfg = {"news": {"sources": [{"id": "news5", "name": "News5", "channel_id": "UCx"}]}}
     assert yt_cli.source_id_for_channel(cfg, "UCx") == "news5"

@@ -1144,7 +1144,7 @@ def run_search_mode(
 
             def search_goodbye():
                 stop()
-                print(f"\n  {c(C.DIM, 'Goodbye! 👋')}\n")
+                print(f"\n  {c(C.DIM, 'Goodbye!')}\n")
 
             result = playing_menu(
                 ui,
@@ -1329,24 +1329,6 @@ def playing_menu(ui, header_fn, actions_fn, pausable, handle, stop, goodbye):
             return result
 
 
-def exit_prompt(ui, goodbye):
-    """Ask what to do with a live player. Returns True when the app should exit."""
-    if not player_active():
-        goodbye()
-        return True
-    action = ui.action(
-        ["Player is still running.", "─" * 44],
-        [("detach (keeps playing)", "d"), ("exit (stops player)", "s")],
-    )
-    if action == "d":
-        print(f"\n  {c(C.GREEN, '▶')}  {c(C.DIM, 'detached · playing in background')}\n")
-        return True
-    if action != "s":
-        return False
-    goodbye()
-    return True
-
-
 def run_history_screen(cfg, ui, stop, play):
     items = load_json(HISTORY_PATH, [])
     if not items:
@@ -1457,7 +1439,7 @@ def _search_play_default(cfg):
 def now_playing_screen(cfg, ui):
     def goodbye():
         stop_shared()
-        print(f"\n  {c(C.DIM, 'Goodbye! 👋')}\n")
+        print(f"\n  {c(C.DIM, 'Goodbye!')}\n")
 
     if not (NOW_PLAYING[0] or {}).get("title"):
         return
@@ -1566,7 +1548,7 @@ def run_fzf(cfg, mode=None):
 
     def goodbye():
         stop_shared()
-        print(f"\n  {c(C.DIM, 'Goodbye! 👋')}\n")
+        print(f"\n  {c(C.DIM, 'Goodbye!')}\n")
 
     def _clean_exit(sig, frame):
         stop_shared()
@@ -1586,16 +1568,17 @@ def run_fzf(cfg, mode=None):
         if player_active():
             entries.insert(0, "▶ Now Playing")
         entries.append("Exit")
-        idx = ui.pick(entries, "main ❯ ", "yt-cli · saved / search / history", "50%")
+        header = "yt-cli · saved / search / history"
+        if player_active():
+            header += "\nExit leaves playback running"
+        idx = ui.pick(entries, "main ❯ ", header, "50%")
         if idx is None:
-            if exit_prompt(ui, goodbye):
-                return
-            continue
+            print(f"\n  {c(C.DIM, 'Goodbye!')}\n")
+            return
         choice = entries[idx]
         if choice == "Exit":
-            if exit_prompt(ui, goodbye):
-                return
-            continue
+            print(f"\n  {c(C.DIM, 'Goodbye!')}\n")
+            return
         if choice == "▶ Now Playing":
             try:
                 now_playing_screen(cfg, ui)
@@ -3605,7 +3588,7 @@ def run_saved_mode(cfg, ui, kind=None, stop=None, goodbye=None, on_esc="quit"):
 
         def default_goodbye():
             stop()
-            print(f"\n  {c(C.DIM, 'Goodbye! 👋')}\n")
+            print(f"\n  {c(C.DIM, 'Goodbye!')}\n")
 
         goodbye = default_goodbye
 
@@ -5393,7 +5376,7 @@ def _curses_main(stdscr, cfg, mode):
 
     def goodbye():
         stop_shared()
-        _curses_ui_message(stdscr, ["Goodbye! 👋"])
+        _curses_ui_message(stdscr, ["Goodbye!"])
 
     if mode in ("radio", "stations", "news"):
         dest = {"radio": "Presets", "stations": "Radio", "news": "News"}[mode]
@@ -5405,16 +5388,18 @@ def _curses_main(stdscr, cfg, mode):
         if player_active():
             entries.insert(0, "▶ Now Playing")
         entries.append("Exit")
-        idx = ui.pick(entries, "main ❯ ", "yt-cli · saved / search / history", "50%")
+        idx = ui.pick(
+            entries,
+            "main ❯ ",
+            "yt-cli · saved / search / history"
+            + ("\nExit leaves playback running" if player_active() else ""),
+            "50%",
+        )
         if idx is None:
-            if exit_prompt(ui, goodbye):
-                break
-            continue
+            break
         choice = entries[idx]
         if choice == "Exit":
-            if exit_prompt(ui, goodbye):
-                break
-            continue
+            break
         if choice == "▶ Now Playing":
             try:
                 now_playing_screen(cfg, ui)
@@ -5431,6 +5416,7 @@ def _curses_main(stdscr, cfg, mode):
                     )
             continue
         _run_mode_loop(cfg, ui, choice, stop_shared, play_mpv, goodbye, on_esc="home")
+    _curses_ui_message(stdscr, ["Goodbye!"])
 
 
 def _curses_ui_message(stdscr, lines):
@@ -5500,7 +5486,7 @@ if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
-        print("\n\n👋 Goodbye!")
+        print("\n\nGoodbye!")
         sys.exit(0)
     except Exception as e:
         print(f"\n❌ Error: {e}")
