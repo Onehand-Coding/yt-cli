@@ -1259,7 +1259,7 @@ def with_pause(actions, pausable=True):
 # ---------- unified action tables ----------
 
 PLAY_ACTIONS_SEARCH = [
-    ("back", "b"),
+    ("←", "b"),
     ("go to…", "g"),
     ("history", "h"),
     ("new search", "s"),
@@ -1272,7 +1272,7 @@ PLAY_ACTIONS_SEARCH = [
 ]
 
 PLAY_ACTIONS_RADIO = [
-    ("back", "b"),
+    ("←", "b"),
     ("go to…", "g"),
     ("history", "h"),
     ("search", "s"),
@@ -1287,13 +1287,13 @@ PLAY_ACTIONS_RADIO = [
 ]
 
 PLAY_ACTIONS_NEWS = [
-    ("back", "b"),
+    ("←", "b"),
     ("go to…", "g"),
     ("history", "h"),
     ("search", "s"),
     ("replay", "r"),
-    ("change audio", "p"),
-    ("refresh streams", "f"),
+    ("toggle video", "v"),
+    ("change player", "p"),
     ("save", "k"),
     ("stop", "q"),
     ("detach", "d"),
@@ -1480,7 +1480,7 @@ def now_playing_screen(cfg, ui):
     def actions():
         current = NOW_PLAYING[0] or {}
         kind = current.get("kind") or "video"
-        rows = [("back", "b"), ("go to…", "g")]
+        rows = [("←", "b"), ("go to…", "g")]
         channel_id = current.get("channel_id")
         if channel_id and (
             current.get("source_id") or source_id_for_channel(cfg, channel_id)
@@ -3220,7 +3220,7 @@ def manage_stations_screen(cfg, ui):
 
 
 PLAY_ACTIONS_STATION = [
-    ("back", "b"),
+    ("←", "b"),
     ("go to…", "g"),
     ("history", "h"),
     ("new search", "s"),
@@ -4488,7 +4488,7 @@ def pick_stream(streams, source_name, ui):
         if action == "r":
             return "retry"
         return None
-    lines = [format_stream_row(stream) for stream in streams]
+    lines = ["  ↻  refresh streams"] + [format_stream_row(stream) for stream in streams]
     live_count = sum(1 for stream in streams if stream.get("status") == "live")
     upcoming_count = sum(1 for stream in streams if stream.get("status") == "upcoming")
     if live_count:
@@ -4505,7 +4505,9 @@ def pick_stream(streams, source_name, ui):
     )
     if idx is None:
         return None
-    return streams[idx]
+    if idx == 0:
+        return "retry"
+    return streams[idx - 1]
 
 
 def pick_player(current_player, ui):
@@ -4754,6 +4756,10 @@ def run_news_mode(cfg, ui, stop, goodbye, on_esc="quit", initial_source=None):
                     st = current_stream[0]
                     if action == "r":
                         play_news(st)
+                    elif action == "v":
+                        nv, live = toggle_video_setting()
+                        if not live:
+                            play_news(st)
                     elif action == "k":
                         save_current(
                             cfg,
@@ -4832,6 +4838,13 @@ def run_news_mode(cfg, ui, stop, goodbye, on_esc="quit", initial_source=None):
                         if item.get("status") != "past"
                         or item.get("hours_ago", 9999) <= settings["recent_hours"]
                     ]
+                    for item in cached_streams:
+                        if not item.get("source"):
+                            item["source"] = (
+                                source_info.get("channel_name")
+                                or source_info.get("name")
+                                or channel_id
+                            )
             except ChannelError as exc:
                 sp.fail(str(exc))
                 action = ui.action(
@@ -4899,13 +4912,14 @@ def run_news_mode(cfg, ui, stop, goodbye, on_esc="quit", initial_source=None):
                     stream = current_stream[0]
                     if action == "r":
                         play_news(stream, source_info)
+                    elif action == "v":
+                        nv, live = toggle_video_setting()
+                        if not live:
+                            play_news(stream, source_info)
                     elif action == "s":
                         run_search_mode(cfg, ui, stop, _search_play_default(cfg), return_home=True)
                     elif action == "h":
                         run_history_screen(cfg, ui, stop, _search_play_default(cfg))
-                    elif action == "f":
-                        stop()
-                        return "refresh"
                     elif action == "p":
                         new_player = pick_player(pl, ui)
                         if new_player and new_player != pl:
@@ -4945,8 +4959,6 @@ def run_news_mode(cfg, ui, stop, goodbye, on_esc="quit", initial_source=None):
                 )
                 cfg = load_config()
                 settings, sources = load_news_cfg(cfg)
-                if result == "refresh":
-                    break
 
             if go_back_to_main:
                 if single_source:

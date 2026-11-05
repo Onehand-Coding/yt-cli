@@ -43,12 +43,15 @@ reported as `unknown`.
 
 The action menu is shared by search, presets, radio, channels, and Now Playing.
 
-- `Esc` or `back`: return to the previous list, keep playing.
+- `Esc` or the `←` row: return to the previous list, keep playing.
 - `stop`: stop playback and return to the list.
 - `detach`: exit and keep playing.
 - `exit`: stop and exit.
 - `pause` / `play`: available for VOD, replays, search results, and presets.
 - `channel`: reopen the channel from Now Playing.
+- `change player`: choose mpv, vlc, or ffplay for the current stream.
+
+Refresh streams is a row on the live list, not an action on the playing screen.
 
 ## Install
 

@@ -191,7 +191,7 @@ def test_now_playing_actions_include_channel_and_save(monkeypatch):
     )
     yt_cli.now_playing_screen({"news": {"sources": []}}, ui)
     labels = [label for label, _ in ui.actions[0]]
-    assert "back" in labels
+    assert "←" in labels
     assert "channel" in labels
     assert "save" in labels
     assert "stop" in labels
@@ -208,8 +208,21 @@ def test_playing_tables_start_at_back_and_end_at_exit():
     ]
     for table in tables:
         labels = [label for label, _ in table]
-        assert labels[0] == "back"
+        assert labels[0] == "←"
         assert labels[-3:] == ["stop", "detach", "exit"]
 
     search = [label for label, _ in yt_cli.PLAY_ACTIONS_SEARCH]
     assert search[1:5] == ["go to…", "history", "new search", "replay"]
+
+
+def test_pick_stream_refresh_row_maps_to_retry():
+    class UI:
+        def __init__(self, idx):
+            self.idx = idx
+
+        def pick(self, items, prompt, header, height):
+            return self.idx
+
+    streams = [{"title": "One", "status": "live", "viewers_text": ""}]
+    assert yt_cli.pick_stream(streams, "News5", UI(0)) == "retry"
+    assert yt_cli.pick_stream(streams, "News5", UI(1)) == streams[0]
