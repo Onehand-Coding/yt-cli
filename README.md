@@ -11,28 +11,27 @@ The application is Python standard library only. It uses `mpv`, `yt-dlp`, and
 | Command | Opens |
 | --- | --- |
 | `yt-cli` | Saved / Search / History |
-| `yt-cli --radio` | Saved, filtered to YouTube presets |
-| `yt-cli --stations` | Saved, filtered to internet radio |
-| `yt-cli --news` | Saved, filtered to channels |
+| `yt-cli --presets` | Saved, filtered to YouTube presets |
+| `yt-cli --radio` | Saved, filtered to internet radio |
+| `yt-cli --channels` | Saved, filtered to YouTube channels |
 | `~/.local/bin/music/<name>` | A saved preset or radio station |
 
-The flag names are historical. The UI calls internet radio **Radio** and YouTube
-presets **Presets**.
+`--stations` is an alias for `--radio`; `--news` is an alias for `--channels`.
 
 ## Channels
 
-A news source is a YouTube channel, not a stream link. Selecting a channel shows
+A saved channel is a YouTube channel, not a stream link. Selecting a channel shows
 its current lives, scheduled streams, and recent replays. Stream IDs change
 daily; the channel does not.
 
 ```bash
-yt-cli --news                            # channel list
-yt-cli --news news5everywhere            # top live, or print the list if none
-yt-cli --news news5everywhere --replay   # newest replay
-yt-cli --news --verify                   # report channel bindings
-yt-cli --news --verify --apply           # fill exact-name ids, disable 404s
-yt-cli --news --add "105.9 True FM"      # add a channel by exact title
-yt-cli --news --bind News5Everywhere @TV5NewsPH
+yt-cli --channels                            # channel list
+yt-cli --channels news5everywhere            # top live, or print the list if none
+yt-cli --channels news5everywhere --replay   # newest replay
+yt-cli --channels --verify                   # report channel bindings
+yt-cli --channels --verify --apply           # fill exact-name ids, disable 404s
+yt-cli --channels --add "105.9 True FM"      # add a channel by exact title
+yt-cli --channels --bind News5Everywhere @TV5NewsPH
 ```
 
 `--verify` reports a label mismatch but does not rename the source or change a

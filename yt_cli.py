@@ -1531,7 +1531,7 @@ def _run_mode(cfg, ui, choice, stop, play_mpv, goodbye, on_esc="quit"):
         run_saved_mode(cfg, ui, "preset", stop, goodbye, on_esc=on_esc)
     elif choice == "Radio":
         run_saved_mode(cfg, ui, "station", stop, goodbye, on_esc=on_esc)
-    elif choice == "News":
+    elif choice == "Channels":
         run_saved_mode(cfg, ui, "channel", stop, goodbye, on_esc=on_esc)
     elif choice == "History":
         run_history_screen(cfg, ui, stop, play_mpv)
@@ -1563,8 +1563,8 @@ def run_fzf(cfg, mode=None):
     signal.signal(signal.SIGHUP, _clean_exit)
     signal.signal(signal.SIGTERM, _clean_exit)
 
-    if mode in ("radio", "stations", "news"):
-        dest = {"radio": "Presets", "stations": "Radio", "news": "News"}[mode]
+    if mode in ("presets", "radio", "channels"):
+        dest = {"presets": "Presets", "radio": "Radio", "channels": "Channels"}[mode]
         if not _run_mode_loop(cfg, ui, dest, stop_shared, play_mpv, goodbye):
             return
 
@@ -2302,13 +2302,13 @@ GO_TO_LABELS = {
     "saved": "Saved",
     "presets": "Presets",
     "radio": "Radio",
-    "news": "News",
+    "channels": "Channels",
     "search": "Search",
 }
 
 
 def go_to_picker(ui):
-    entries = ["Saved", "Presets", "Radio", "News", "Search", "Home"]
+    entries = ["Saved", "Presets", "Radio", "Channels", "Search", "Home"]
     idx = ui.pick(entries, "go to ❯ ", "Go to\n" + "─" * 44 + "\nEsc → back", "35%")
     if idx is None:
         return None
@@ -2316,7 +2316,7 @@ def go_to_picker(ui):
         "Saved": "saved",
         "Presets": "presets",
         "Radio": "radio",
-        "News": "news",
+        "Channels": "channels",
         "Search": "search",
         "Home": "home",
     }[entries[idx]]
@@ -4811,7 +4811,7 @@ def run_news_mode(cfg, ui, stop, goodbye, on_esc="quit", initial_source=None):
                         settings["recent_hours"],
                     )
                 elif not channel_id:
-                    raise ChannelError("needs repair: run --news --verify, then rebind this source")
+                    raise ChannelError("needs repair: run --channels --verify, then rebind this source")
                 else:
                     cached_streams = channel_lives(channel_id, settings["timeout"])
                     cached_streams = [
@@ -4978,22 +4978,25 @@ def play_stream_cli(url, player=None, quality="720", direct_url=None):
 
 def print_news_help(sources):
     print(f"""
-📺 NEWS: Filipino News Live Stream Finder (yt-cli)
+📺 CHANNELS · Saved YouTube channels (yt-cli)
 
 CONFIG: {CONFIG_PATH}
 
 USAGE:
     yt-cli                         Main menu
-    yt-cli --news / -n            Interactive TUI mode (news)
-    yt-cli --news <source> [player] [--replay]  Play the channel's live
-    yt-cli --news --list
-    yt-cli --news --verify [--apply] [--json]
-    yt-cli --news --add <name> [@handle|UC...|url]
-    yt-cli --news --bind <source-id> <@handle|UC...|url>
-    yt-cli --news --config
-    yt-cli --news --help
+    yt-cli --channels / -c         Channels TUI
+    yt-cli --channels <channel> [player] [--replay]
+    yt-cli --channels --list
+    yt-cli --channels --verify [--apply] [--json]
+    yt-cli --channels --add <name> [@handle|UC...|url]
+    yt-cli --channels --bind <source-id> <@handle|UC...|url>
+    yt-cli --channels --config
+    yt-cli --channels --help
 
-SUPPORTED SOURCES:""")
+ALIAS:
+    --news / -n                    Same as --channels
+
+SAVED CHANNELS:""")
     for key, info in sorted(sources.items()):
         print(f"    {'✓' if info['enabled'] else '✗'}  {key:<25} - {info['name']}")
     print("""
@@ -5006,9 +5009,9 @@ CHANNEL BEHAVIOR:
     unless you pass --replay.
 
 EXAMPLES:
-    yt-cli --news news5everywhere
-    yt-cli --news news5everywhere --replay
-    yt-cli --news 24-oras vlc
+    yt-cli --channels news5everywhere
+    yt-cli --channels news5everywhere --replay
+    yt-cli --channels 24-oras vlc
 """)
 
 
@@ -5087,18 +5090,18 @@ def print_radio_help(presets):
     for slug, info in presets.items():
         categories.setdefault(info["category"], []).append((slug, info["name"]))
     print(f"""
-🎵 RADIO · Music preset player (yt-cli)
+🎵 PRESETS · YouTube presets (yt-cli)
 
 CONFIG: {CONFIG_PATH}
 
 USAGE:
     yt-cli                        Main menu
-    yt-cli --radio / -r           Radio TUI
-    yt-cli --radio <preset> [options]  Direct play
-    yt-cli --radio <url> [options]     Play a URL directly
-    yt-cli --radio --list
-    yt-cli --radio --config
-    yt-cli --radio --help
+    yt-cli --presets / -p         Presets TUI
+    yt-cli --presets <preset> [options]  Direct play
+    yt-cli --presets <url> [options]     Play a URL directly
+    yt-cli --presets --list
+    yt-cli --presets --config
+    yt-cli --presets --help
 
 OPTIONS:
     --no-video, --no-window     Force audio-only (suppress window)
@@ -5106,7 +5109,7 @@ OPTIONS:
     --no-loop                   Don't loop
     --bg, --background          Run in background
     --fg, --foreground          Run in foreground
-    --radio                     Seed YouTube radio mix
+    --radio                     Seed a YouTube radio mix (preset option)
     --quality=<n>               Cap video height (default 720, from config)
     --shuffle                   Shuffle playlist
 
@@ -5135,9 +5138,9 @@ def _radio_cli_main():
 
     if not args:
         if find_fzf():
-            run_fzf(cfg, mode="radio")
+            run_fzf(cfg, mode="presets")
         else:
-            run_curses(cfg, mode="radio")
+            run_curses(cfg, mode="presets")
         return
 
     if args[0] in ("--help", "-h", "help"):
@@ -5148,7 +5151,7 @@ def _radio_cli_main():
         categories = {}
         for slug, info in presets.items():
             categories.setdefault(info["category"], []).append((slug, info))
-        print(f"\n{c(C.BOLD + C.CYAN, '🎵  radio')}  ·  presets\n")
+        print(f"\n{c(C.BOLD + C.CYAN, '🎵  presets')}  ·  saved\n")
         for cat, items in categories.items():
             print(f"  {c(C.DIM + C.BOLD, cat)}")
             for slug, info in items:
@@ -5189,9 +5192,9 @@ def _news_cli_main():
 
     if not args:
         if find_fzf():
-            run_fzf(cfg, mode="news")
+            run_fzf(cfg, mode="channels")
         else:
-            run_curses(cfg, mode="news")
+            run_curses(cfg, mode="channels")
         return
 
     if args[0] in ("--help", "-h", "help"):
@@ -5199,7 +5202,7 @@ def _news_cli_main():
         sys.exit(0)
 
     if args[0] in ("--list", "-l", "list"):
-        print("\n📡 AVAILABLE NEWS SOURCES:")
+        print("\n📡 SAVED CHANNELS:")
         print("-" * 60)
         for key, info in sorted(sources.items()):
             status = "🟢" if info["enabled"] else "🔴"
@@ -5233,7 +5236,7 @@ def _news_cli_main():
 
     if args[0] == "--add":
         if len(args) < 2:
-            print("❌ usage: yt-cli --news --add <name> [@handle|UC...|url]")
+            print("❌ usage: yt-cli --channels --add <name> [@handle|UC...|url]")
             sys.exit(1)
         name = args[1]
         ref = args[2] if len(args) > 2 else name
@@ -5246,7 +5249,7 @@ def _news_cli_main():
 
     if args[0] == "--bind":
         if len(args) < 3:
-            print("❌ usage: yt-cli --news --bind <source-id> <@handle|UC...|url>")
+            print("❌ usage: yt-cli --channels --bind <source-id> <@handle|UC...|url>")
             sys.exit(1)
         resolved = bind_channel(cfg, args[1], args[2])
         if not resolved:
@@ -5287,7 +5290,7 @@ def _news_cli_main():
     channel_id = matched.get("channel_id") or ""
     if not channel_id:
         print(f"⚠️  {matched['name']} has no channel id.")
-        print("    Run: yt-cli --news --verify")
+        print("    Run: yt-cli --channels --verify")
         sys.exit(1)
 
     print(f"\n📺 {matched['name']}")
@@ -5330,11 +5333,14 @@ def print_stations_help(stations):
 CONFIG: {CONFIG_PATH}
 
 USAGE:
-    yt-cli --stations / -s              Radio TUI (legacy flag name)
-    yt-cli --stations <slug|url>        Play a saved radio station or stream URL
-    yt-cli --stations --list
-    yt-cli --stations --config
-    yt-cli --stations --help
+    yt-cli --radio / -r                 Radio TUI
+    yt-cli --radio <slug|url>           Play a saved radio station or stream URL
+    yt-cli --radio --list
+    yt-cli --radio --config
+    yt-cli --radio --help
+
+ALIAS:
+    --stations / -s                     Same as --radio
 
 OPTIONS:
     --bg, --background     Run in background
@@ -5356,9 +5362,9 @@ def run_stations_cli():
 
     if not args:
         if find_fzf():
-            run_fzf(cfg, mode="stations")
+            run_fzf(cfg, mode="radio")
         else:
-            run_curses(cfg, mode="stations")
+            run_curses(cfg, mode="radio")
         return
 
     if args[0] in ("--help", "-h", "help"):
@@ -5417,8 +5423,8 @@ def _curses_main(stdscr, cfg, mode):
         stop_shared()
         _curses_ui_message(stdscr, ["Goodbye!"])
 
-    if mode in ("radio", "stations", "news"):
-        dest = {"radio": "Presets", "stations": "Radio", "news": "News"}[mode]
+    if mode in ("presets", "radio", "channels"):
+        dest = {"presets": "Presets", "radio": "Radio", "channels": "Channels"}[mode]
         if not _run_mode_loop(cfg, ui, dest, stop_shared, play_mpv, goodbye):
             return
 
@@ -5470,7 +5476,9 @@ def _curses_ui_message(stdscr, lines):
 
 def main():
     args = sys.argv[1:]
-    stations_flag = bool(args) and args[0] in ("--stations", "-s")
+    stations_flag = bool(args) and args[0] in ("--radio", "-r", "--stations", "-s")
+    presets_flag = bool(args) and args[0] in ("--presets", "-p")
+    channels_flag = bool(args) and args[0] in ("--channels", "-c", "--news", "-n")
     migrate_configs()
     script_name = Path(sys.argv[0]).name
     cfg = load_config()
@@ -5492,10 +5500,10 @@ def main():
     elif stations_flag:
         sys.argv = [sys.argv[0]] + args[1:]
         run_stations_cli()
-    elif args and args[0] in ("--radio", "-r"):
+    elif presets_flag:
         sys.argv = [sys.argv[0]] + args[1:]
         _radio_cli_main()
-    elif args and args[0] in ("--news", "-n"):
+    elif channels_flag:
         sys.argv = [sys.argv[0]] + args[1:]
         _news_cli_main()
     else:

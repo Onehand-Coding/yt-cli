@@ -8,7 +8,7 @@ ani-py style; same content as the former monolith). The wrapper does
 `from yt_cli import main` and carries the KeyboardInterrupt/error handlers that
 used to live only in the monolith's `__main__` guard. Symlinked at
 `~/.local/bin/yt-cli`. The `tune` and `news-stream`
-symlinks were REMOVED; radio/news are invoked via `yt-cli --radio` / `yt-cli --news`.
+symlinks were REMOVED; presets/radio/channels are invoked via `yt-cli --presets` / `--radio` / `--channels`.
 Dispatch is by `Path(sys.argv[0]).name` (argv[0] is preserved by Python when
 running through the wrapper, and `sys.path[0]` resolves the music/* → ../yt-cli
 → repo symlink chain, so `import yt_cli` works): `yt-cli` → main menu, a music/<preset>
@@ -49,7 +49,7 @@ directly at the wrapper file — still correct. E2E harness: `tests/e2e/`. Proje
   inner; Esc from a picker with a live player returns to the action menu. `stop`
   returns to the list, `detach` exits and leaves the player running, `exit` stops
   and exits. Esc at the preset/radio/channel list goes home with playback kept
-  when launched from the main menu (`on_esc="home"`); direct `--radio`/`--news`
+  when launched from the main menu (`on_esc="home"`); direct `--presets`/`--radio`/`--channels`
   launches keep stop-and-quit. Results and history honor `return_home`.
 - **Config** — `~/.config/yt-cli/config.json` (migrated: history_size,
   mpv_args, news, radio, result_count). Originals at
@@ -107,14 +107,14 @@ directly at the wrapper file — still correct. E2E harness: `tests/e2e/`. Proje
 - News source keys are `id` not `slug`; news CLI fuzzy matching
   (`key in source_query`) can substring-match and trigger a real scrape.
 - Radio CLI: flags come AFTER the preset (`yt-cli --radio lofi --no-video --loop`).
-- Radio/news CLI help/examples use `yt-cli --radio` / `yt-cli --news`; `tune` /
+- CLI help/examples use `yt-cli --presets` / `--radio` / `--channels`; `tune` /
   `news-stream` are gone (symlinks removed 2026-08-20).
 
 ## E2E harness
 
 `tests/e2e/pty_harness.py` + `flow_a.py` (search/actions),
-`flow_b.py` (radio + universal search, via `yt-cli --radio`), `flow_c.py`
-(news, via `yt-cli --news`), `flow_d.py` (curses fallback via fzf-free PATH),
+`flow_b.py` (presets + universal search, via `yt-cli --presets`), `flow_c.py`
+(channels, via `yt-cli --channels`), `flow_d.py` (curses fallback via fzf-free PATH),
 `flow_e.py` (save and navigation), `flow_f.py` (radio with an isolated `HOME`;
 no network/playback). All six flows pass. Run: `python3 flow_*.py` (kills stray
 mpv/fzf first; each takes 1-5 min; requires network). Harness notes from the
@@ -237,7 +237,7 @@ Spec: `docs/specs/2026-10-23-stations-mode-design.md`.
   silent player alive after the stream ends), `--network-timeout=15`,
   `--ytdl=no` (direct streams; never probes yt-dlp) and an explicit
   `--input-ipc-server`. `check_dependencies` only requires mpv for
-  `--stations`, and saved-station symlinks resolve before the check, so
+  `--radio`, and saved-station symlinks resolve before the check, so
   they work without yt-dlp installed. History entries carry
   `kind: "station"`, and `now_playing_screen` hides "toggle video" for
   them. `attach_detached`/`relaunch_detached` map the IPC path back to a
@@ -257,7 +257,7 @@ Spec: `docs/specs/2026-10-23-stations-mode-design.md`.
   after checking the player's `path` is the station URL, and the action
   menu header shows `♪ Artist - Title` when the stream publishes ICY
   metadata.
-- **CLI/UI**: `--stations` / `-s` opens the TUI; `--stations <slug|url>`
+- **CLI/UI**: `--radio` / `-r` opens the TUI; `--radio <slug|url>`
   plays directly (accepts `--bg`), plus `--list`, `--help`, `--config`.
   Main menu is Search / Radio / Stations / News / History / Exit; go-to
   offers Radio / Stations / News / Search / Home. Modes keep the shared
@@ -267,7 +267,7 @@ Spec: `docs/specs/2026-10-23-stations-mode-design.md`.
   theirs). Emoji were kept at the user's request.
 - **Tests**: `tests/test_stations.py` (normalize/merge/search/cache/cmd/
   add-toggle-delete/slug/resolve precedence/play/history, no network) and
-  `tests/e2e/flow_f.py` (isolated `HOME`; `--stations --list` plus
+  `tests/e2e/flow_f.py` (isolated `HOME`; `--radio --list` plus
   main → Stations → Esc → Exit). Curse-suite note: `flow_d.py` now expects
   the new header and asserts `YouTube` (not `search YouTube`) because
   curses diff-renders only the tail of a line whose prefix matches the
@@ -293,10 +293,10 @@ Spec: `docs/specs/2026-11-04-unified-saved-channels-design.md`.
 - **Saving:** `save_options(item)` depends on context. A channel live saves the channel,
   a video offers a preset first, a station saves the station. Channel entries store
   `channel_name` and do not ask for keywords.
-- **Verify:** `--news --verify [--apply] [--json]` is report-only by default. A label
+- **Verify:** `--channels --verify [--apply] [--json]` is report-only by default. A label
   mismatch is not renamed or rebound. A confirmed 404 is disabled, not deleted; timeouts
   are `unknown`. `--bind` changes an existing source; `--add` creates one.
-- **CLI:** `--news <channel>` plays the top live. If none is live it prints the list and
+- **CLI:** `--channels <channel>` plays the top live. If none is live it prints the list and
   exits 0; `--replay` plays the newest replay.
 - **Bindings on this machine:** kapamilya-online-live, kapuso-online-live,
   kapatid-live-stream, and News5Everywhere point to ABS-CBN Entertainment, GMA Network,
@@ -304,7 +304,7 @@ Spec: `docs/specs/2026-11-04-unified-saved-channels-design.md`.
   default. Simulcast channels emit one stream per day; News5, True FM, and ABS-CBN News
   emit one row per show.
 - **Names:** internet radio is Radio (`[radio]`, manage then Radio); YouTube presets
-  are Presets. Legacy flags: `--radio` opens presets, `--stations` opens radio.
+  are Presets. Canonical flags: `--presets`, `--radio`, `--channels`; `--stations` and `--news` are aliases.
 - **Playing screen:** one shared menu for search, presets, radio, channels, and Now
   Playing. Esc returns to the parent list and keeps playback; `stop` stops and
   returns there; `detach` exits and leaves the player running; `exit` stops and exits.
@@ -313,7 +313,7 @@ Spec: `docs/specs/2026-11-04-unified-saved-channels-design.md`.
   a row on the live list, not a playing action. `save` is hidden when the channel, preset, or station is
   already saved; `channel` reopens the channel from Now Playing. Exit or Esc at main
   closes the UI and leaves playback running; the header says so when a player is active.
-  Go-to Home from a direct `--radio`, `--stations`, or `--news` session opens the main
+  Go-to Home from a direct `--presets`, `--radio`, or `--channels` session opens the main
   menu instead of exiting.
 - **Checks:** CI runs `ruff check .`, `pyright yt_cli.py`, and `pytest` on pushes to
   `main` and on pull requests. `yt_cli.py` is above 5000 lines, past pi-lens's LSP

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""E2E flow F: Stations mode against an isolated HOME (no network, no play).
+"""E2E flow F: Radio mode against an isolated HOME (no network, no play).
 
 Verifies the CLI listing plus the main-menu → Stations → back → exit path
 without touching the real ~/.config/yt-cli or launching mpv.
@@ -52,14 +52,14 @@ def main() -> int:
     ok = True
 
     listing = subprocess.run(
-        [YT_CLI, "--stations", "--list"],
+        [YT_CLI, "--radio", "--list"],
         env={**os.environ, **env},
         capture_output=True,
         text=True,
         timeout=30,
     )
     listed = listing.returncode == 0 and "jazz-fm" in listing.stdout and "Jazz FM" in listing.stdout
-    print(f"  [{'PASS' if listed else 'FAIL'}] --stations --list")
+    print(f"  [{'PASS' if listed else 'FAIL'}] --radio --list")
     ok &= listed
 
     h = Harness([YT_CLI], env=env, name="flow_f")

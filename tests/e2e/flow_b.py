@@ -8,7 +8,7 @@ from pty_harness import Harness
 YT_CLI = str(HERE.parents[1] / "yt-cli")
 
 def flow_b():
-    h = Harness([YT_CLI, "--radio"], name="radio")
+    h = Harness([YT_CLI, "--presets"], name="radio")
     ok = True
     ok &= h.wait_new("preset ❯", 15)
     h.send("1\r", 0.4)

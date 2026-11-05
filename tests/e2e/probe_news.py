@@ -6,7 +6,7 @@ sys.path.insert(0, str(HERE))
 from pty_harness import Harness
 
 YT_CLI = str(HERE.parents[1] / "yt-cli")
-h = Harness([YT_CLI, "--news"], name="news-probe")
+h = Harness([YT_CLI, "--channels"], name="news-probe")
 ok = h.wait_new("source ❯", 15)
 h.send("1\r", 0.4)
 ok = h.wait_new("stream ❯", 120) and ok
