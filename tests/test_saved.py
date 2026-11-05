@@ -170,10 +170,15 @@ def test_stream_pausable_rules():
     assert yt_cli.stream_pausable({"title": "video"}) is True
 
 
-def test_with_pause_inserts_before_stop(monkeypatch):
+def test_with_pause_inserts_after_replay(monkeypatch):
     monkeypatch.setattr(yt_cli, "player_paused", lambda: False)
-    actions = [("start", "a"), ("stop", "q")]
-    assert yt_cli.with_pause(actions) == [("start", "a"), ("pause", "u"), ("stop", "q")]
+    actions = [("replay", "r"), ("save", "k"), ("stop", "q")]
+    assert yt_cli.with_pause(actions) == [
+        ("replay", "r"),
+        ("pause", "u"),
+        ("save", "k"),
+        ("stop", "q"),
+    ]
 
 
 def test_with_pause_uses_play_when_paused(monkeypatch):
@@ -273,3 +278,17 @@ def test_saving_a_preset_keeps_channels_saved_earlier(cfg_files, monkeypatch):
     saved = yt_cli.load_config()
     assert any(source["id"] == "news5" for source in saved["news"]["sources"])
     assert any(preset["slug"] == "e2e-preset" for preset in saved["radio"]["presets"])
+
+
+def test_playing_tables_have_back_and_no_other():
+    tables = [
+        yt_cli.PLAY_ACTIONS_SEARCH,
+        yt_cli.PLAY_ACTIONS_RADIO,
+        yt_cli.PLAY_ACTIONS_NEWS,
+        yt_cli.PLAY_ACTIONS_STATION,
+    ]
+    for table in tables:
+        labels = [label for label, _ in table]
+        assert "go to" in labels
+        assert "←" not in labels
+        assert not any(label.startswith("other ") for label in labels)

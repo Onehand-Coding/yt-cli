@@ -14,7 +14,7 @@ from pty_harness import Harness
 YT_CLI = str(HERE.parents[1] / "yt-cli")
 
 CFG = Path("/home/kenneth/.config/yt-cli/config.json")
-BACKUP = Path("/tmp/opencode/config_backup_e.json")
+BACKUP = HERE / ".config_backup_e.json"
 URL = "https://www.youtube.com/watch?v=jNQXAC9IVRw"
 
 ok = True
@@ -107,6 +107,7 @@ def main():
         check("clean exit", ok4)
     finally:
         h.kill()
+        subprocess.run(["pkill", "-x", "mpv"])
         shutil.copy(BACKUP, CFG)
     after = cfg_presets()
     added = (after - before) or {"(restored)"}

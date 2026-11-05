@@ -39,6 +39,23 @@ yt-cli --news --bind News5Everywhere @TV5NewsPH
 non-empty channel id. A confirmed 404 is disabled, not deleted. Timeouts are
 reported as `unknown`.
 
+## Playing
+
+The action menu is shared by search, presets, radio, channels, and Now Playing.
+
+- `Esc`: return to the previous list, keep playing.
+- `stop`: stop playback and return to the list.
+- `detach`: exit and keep playing.
+- `exit`: stop and exit.
+- `pause` / `play`: available for VOD, replays, search results, and presets.
+- `channel`: reopen the channel from Now Playing.
+- `save`: hidden when the channel, preset, or station is already saved.
+
+Exit or Esc at the main menu closes the UI and leaves the player running. Use `stop`
+from Now Playing to end playback.
+
+Refresh streams is a row on the live list, not an action on the playing screen.
+
 ## Install
 
 ```bash

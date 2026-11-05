@@ -484,6 +484,28 @@ class FzfUI:
                 return code
         return "q"
 
+    def playing_action(self, header_lines, actions):
+        labels = [label for label, _ in actions]
+        query, chosen, escaped = fzf_pick(
+            labels,
+            prompt="action ❯ ",
+            header="\n".join(header_lines)
+            + "\n"
+            + c(C.DIM, "Esc → back   ·   q stop")
+            + "\n"
+            + "─" * 44,
+            height="70%",
+            capture_query=True,
+        )  # type: ignore[misc]
+        if escaped:
+            return "b"
+        if chosen is not None:
+            for label, code in actions:
+                if strip_ansi(chosen).strip() == label:
+                    return code
+            return "b"
+        return "q" if (query or "").strip() == "q" else "b"
+
     def query(self, header_lines):
         q, _, escaped = fzf_pick(
             [], prompt="search ❯ ", header="\n".join(header_lines), height="25%", capture_query=True
@@ -704,6 +726,42 @@ class CursesUI:
         if idx is None:
             return "q"
         return actions[idx][1]
+
+    def playing_action(self, header_lines, actions):
+        stdscr = self.stdscr
+        h, _ = stdscr.getmaxyx()
+        items = [
+            _num_line(i + 1, f"{label}  {c(C.DIM, '[' + code + ']')}")
+            for i, (label, code) in enumerate(actions)
+        ]
+        header = "\n".join(header_lines) + "\n" + "─" * 44
+        sel, top = 0, 0
+        while True:
+            _curses_draw_list(
+                stdscr,
+                header,
+                items,
+                sel,
+                top,
+                "up/k down/j move   enter select   q stop   Esc back",
+            )
+            key = stdscr.getch()
+            if key in (curses.KEY_UP, ord("k")):
+                sel = max(0, sel - 1)
+            elif key in (curses.KEY_DOWN, ord("j")):
+                sel = min(max(0, len(items) - 1), sel + 1)
+            elif key in (curses.KEY_ENTER, 10, 13):
+                return actions[sel][1] if 0 <= sel < len(actions) else "b"
+            elif key == 27:
+                return "b"
+            elif key == ord("q"):
+                return "q"
+            h, _ = stdscr.getmaxyx()
+            visible = h - 3
+            if sel < top:
+                top = sel
+            elif sel >= top + visible:
+                top = sel - visible + 1
 
     def query(self, header_lines):
         stdscr = self.stdscr
@@ -1044,61 +1102,86 @@ def run_search_mode(
 
     while True:
         if item is not None:
-            header_lines = [
-                f"▶  {c(C.BOLD, (item.get('title') or item.get('url') or '')[:60])}",
-                f"   {c(C.DIM, 'Uploader')} : {item.get('uploader') or 'Unknown'}   "
-                f"{c(C.DIM, 'Length')} : {format_duration(item.get('duration'))}",
-            ]
-            if PLAYER_PROC[0] is not None and PLAYER_PROC[0].poll() is not None:
-                header_lines.append(f"   {c(C.YELLOW, '⚠  Player exited.')}")
-            action = ui.action(header_lines, with_pause(PLAY_ACTIONS_SEARCH))
-            if action == "r":
-                play(item)
-            elif action == "u":
-                toggle_pause()
-            elif action == "o":
-                item = None
-                continue  # back to results picker, player keeps playing
-            elif action == "h":
-                items = load_json(HISTORY_PATH, [])
-                header = "yt-cli · history"
-                if not items:
-                    ui.info(["No history yet"])
-                continue
-            elif action == "s":
-                return run_search_mode(cfg, ui, stop, play, return_home=return_home)
-            elif action == "v":
-                nv, live = toggle_video_setting()
-                if not live:
-                    play(item)  # restart honors new state via adapter
-            elif action == "k":
-                save_current(
+
+            def search_header():
+                assert item is not None
+                lines = [
+                    f"▶  {c(C.BOLD, (item.get('title') or item.get('url') or '')[:60])}",
+                    f"   {c(C.DIM, 'Uploader')} : {item.get('uploader') or 'Unknown'}   "
+                    f"{c(C.DIM, 'Length')} : {format_duration(item.get('duration'))}",
+                    f"   {c(C.DIM, 'Status')} : video",
+                ]
+                if PLAYER_PROC[0] is not None and PLAYER_PROC[0].poll() is not None:
+                    lines.append(f"   {c(C.YELLOW, '⚠  Player exited.')}")
+                return lines
+
+            def search_handle(action):
+                assert item is not None
+                if action == "r":
+                    play(item)
+                elif action == "v":
+                    nv, live = toggle_video_setting()
+                    if not live:
+                        play(item)  # restart honors new state via adapter
+                elif action == "k":
+                    save_current(
+                        cfg,
+                        ui,
+                        {
+                            "title": item.get("title") or item.get("url", ""),
+                            "url": item.get("url", ""),
+                            "uploader": item.get("uploader"),
+                        },
+                        default_kind="preset",
+                    )
+                elif action == "h":
+                    if not load_json(HISTORY_PATH, []):
+                        ui.info(["No history yet"])
+                    else:
+                        return "history"
+                elif action == "s":
+                    return "search"
+                return None
+
+            def search_actions():
+                assert item is not None
+                if saved_item(
                     cfg,
-                    ui,
                     {
-                        "title": item.get("title") or item.get("url", ""),
+                        "kind": item.get("kind") or "video",
                         "url": item.get("url", ""),
-                        "uploader": item.get("uploader"),
+                        "channel_id": item.get("channel_id", ""),
                     },
-                    default_kind="preset",
-                )
-            elif action == "g":
-                dest = go_to_picker(ui)
-                if dest:
-                    raise GoTo(dest)
-            elif action == "d":
-                print(f"\n  {c(C.GREEN, '▶')}  {c(C.DIM, 'detached · playing in background')}\n")
-                sys.exit(0)
-            elif action == "q":
+                ):
+                    return [a for a in PLAY_ACTIONS_SEARCH if a[1] != "k"]
+                return PLAY_ACTIONS_SEARCH
+
+            def search_goodbye():
                 stop()
+                print(f"\n  {c(C.DIM, 'Goodbye!')}\n")
+
+            result = playing_menu(
+                ui,
+                search_header,
+                search_actions,
+                lambda: True,
+                search_handle,
+                stop,
+                search_goodbye,
+            )
+            if result == "stop":
                 item = None
                 if return_home:
                     return
                 break
-            elif action == "x":
-                stop()
-                print(f"\n  {c(C.DIM, 'Goodbye! 👋')}\n")
-                sys.exit(0)
+            if result == "search":
+                return run_search_mode(cfg, ui, stop, play, return_home=return_home)
+            if result == "history":
+                items = load_json(HISTORY_PATH, [])
+                header = "yt-cli · history"
+                item = None
+                continue
+            item = None  # back to results picker, player keeps playing
             continue
         lines = [format_fzf_item(i + 1, it) for i, it in enumerate(items)]
         idx = ui.pick(lines, "result ❯ ", header, "70%")
@@ -1178,10 +1261,10 @@ def with_pause(actions, pausable=True):
         return actions
     out = []
     for action in actions:
-        if action[1] == "q" and pause:
+        out.append(action)
+        if action[1] == "r" and pause:
             out.append(pause)
             pause = None
-        out.append(action)
     if pause:
         out.append(pause)
     return out
@@ -1190,46 +1273,71 @@ def with_pause(actions, pausable=True):
 # ---------- unified action tables ----------
 
 PLAY_ACTIONS_SEARCH = [
-    ("other results", "o"),
-    ("new search", "s"),
+    ("go to", "g"),
     ("history", "h"),
-    ("replay video", "r"),
-    ("go to…", "g"),
-    ("stop", "q"),
-    ("exit", "x"),
+    ("new search", "s"),
+    ("replay", "r"),
     ("toggle video", "v"),
     ("save", "k"),
+    ("stop", "q"),
     ("detach", "d"),
+    ("exit", "x"),
 ]
 
 PLAY_ACTIONS_RADIO = [
-    ("other presets", "o"),
-    ("search", "s"),
+    ("go to", "g"),
     ("history", "h"),
+    ("search", "s"),
     ("replay", "r"),
-    ("go to…", "g"),
-    ("stop", "q"),
-    ("exit", "x"),
     ("toggle video", "v"),
     ("toggle loop", "l"),
-    ("manage presets", "m"),
     ("save", "k"),
+    ("manage presets", "m"),
+    ("stop", "q"),
     ("detach", "d"),
+    ("exit", "x"),
 ]
 
 PLAY_ACTIONS_NEWS = [
-    ("other streams", "o"),
-    ("search", "s"),
+    ("go to", "g"),
     ("history", "h"),
+    ("search", "s"),
     ("replay", "r"),
-    ("go to…", "g"),
-    ("stop", "q"),
-    ("exit", "x"),
-    ("change audio", "p"),
-    ("refresh streams", "f"),
+    ("toggle video", "v"),
     ("save", "k"),
+    ("stop", "q"),
     ("detach", "d"),
+    ("exit", "x"),
 ]
+
+
+def playing_menu(ui, header_fn, actions_fn, pausable, handle, stop, goodbye):
+    """Common playing screen. Esc/back never stops playback."""
+    while True:
+        actions = with_pause(actions_fn(), pausable()) if pausable() else actions_fn()
+        action = ui.playing_action(header_fn(), actions)
+        if action == "b":
+            return "back"
+        if action == "u":
+            toggle_pause()
+            continue
+        if action == "g":
+            dest = go_to_picker(ui)
+            if dest:
+                raise GoTo(dest)
+            continue
+        if action == "q":
+            stop()
+            return "stop"
+        if action == "d":
+            print(f"\n  {c(C.GREEN, '▶')}  {c(C.DIM, 'detached · playing in background')}\n")
+            sys.exit(0)
+        if action == "x":
+            goodbye()
+            sys.exit(0)
+        result = handle(action)
+        if result:
+            return result
 
 
 def run_history_screen(cfg, ui, stop, play):
@@ -1285,7 +1393,18 @@ def _search_play_default(cfg):
         add_to_history(item, cfg["history_size"])
         NOW_PLAYING[0] = {
             "title": item.get("title") or item.get("url", ""),
+            "source": item.get("uploader") or "YouTube",
+            "status": "past" if item.get("kind") == "channel" else "video",
             "pausable": True,
+            "channel_id": item.get("channel_id", ""),
+            "source_id": "",
+            "save_item": {
+                "title": item.get("title") or item.get("url", ""),
+                "url": item.get("url", ""),
+                "uploader": item.get("uploader"),
+                "kind": item.get("kind") or "video",
+                "channel_id": item.get("channel_id", ""),
+            },
             "replay": lambda: play_mpv(item),
         }
         url = item.get("url", "")
@@ -1329,47 +1448,78 @@ def _search_play_default(cfg):
 
 
 def now_playing_screen(cfg, ui):
-    """Compact controls for whatever is playing, reachable from the main
-    menu regardless of which screen the user wandered to."""
-    while True:
-        np = NOW_PLAYING[0] or {}
-        alive = player_active()
-        header = [
-            f"▶  {c(C.BOLD, (np.get('title') or 'Nothing registered')[:60])}",
-            f"   {c(C.GREEN, 'playing') if alive else c(C.DIM, 'player stopped')}",
-            "─" * 44,
+    def goodbye():
+        stop_shared()
+        print(f"\n  {c(C.DIM, 'Goodbye!')}\n")
+
+    if not (NOW_PLAYING[0] or {}).get("title"):
+        return
+
+    def header():
+        current = NOW_PLAYING[0] or {}
+        kind = current.get("kind") or "video"
+        status = current.get("status") or ("radio" if kind == "station" else "video")
+        lines = [
+            f"▶  {c(C.BOLD, current.get('title', ''))}",
+            f"   {c(C.DIM, 'Source')} : {current.get('source') or '-'}",
+            f"   {c(C.DIM, 'Status')} : {status}   "
+            f"{c(C.GREEN, 'playing') if player_active() else c(C.DIM, 'player stopped')}",
         ]
-        entries = ["replay", "toggle video", "go to…", "stop", "detach", "main menu"]
-        if np.get("kind") == "station":
-            entries.remove("toggle video")
-        pause = pause_action() if np.get("pausable") else None
-        if pause:
-            entries.insert(2, pause[0])
-        idx = ui.pick(entries, "now playing ❯ ", "\n".join(header) + "\nEsc → main menu", "50%")
-        if idx is None:
-            return
-        choice = entries[idx]
-        if choice == "replay":
-            if np.get("replay"):
-                np["replay"]()
-        elif choice in ("pause", "play"):
-            toggle_pause()
-        elif choice == "toggle video":
+        if PLAYER_PROC[0] is not None and PLAYER_PROC[0].poll() is not None:
+            lines.append(f"   {c(C.YELLOW, '⚠  Player exited.')}")
+        return lines
+
+    def actions():
+        current = NOW_PLAYING[0] or {}
+        kind = current.get("kind") or "video"
+        rows = [("go to", "g")]
+        channel_id = current.get("channel_id")
+        if channel_id and (current.get("source_id") or source_id_for_channel(cfg, channel_id)):
+            rows.append(("channel", "c"))
+        rows.append(("replay", "r"))
+        if kind != "station":
+            rows.append(("toggle video", "v"))
+        save_item = current.get("save_item")
+        if save_item and not saved_item(cfg, save_item):
+            rows.append(("save", "k"))
+        rows += [("stop", "q"), ("detach", "d"), ("exit", "x")]
+        return rows
+
+    def handle(action):
+        current = NOW_PLAYING[0] or {}
+        if action == "r":
+            if current.get("replay"):
+                current["replay"]()
+        elif action == "v":
             nv, live = toggle_video_setting()
-            if not live and np.get("replay"):
-                np["replay"]()
-        elif choice == "go to…":
-            dest = go_to_picker(ui)
-            if dest:
-                raise GoTo(dest)
-        elif choice == "stop":
-            stop_shared()
-            return
-        elif choice == "detach":
-            print(f"\n  {c(C.GREEN, '▶')}  {c(C.DIM, 'detached · playing in background')}\n")
-            sys.exit(0)
-        elif choice == "main menu":
-            return
+            if not live and current.get("replay"):
+                current["replay"]()
+        elif action == "c":
+            source_id = current.get("source_id") or source_id_for_channel(
+                cfg, current.get("channel_id")
+            )
+            if source_id:
+                run_news_mode(
+                    cfg,
+                    ui,
+                    stop_shared,
+                    goodbye,
+                    on_esc="home",
+                    initial_source=source_id,
+                )
+        elif action == "k":
+            save_current(cfg, ui, current["save_item"], default_kind="news")
+        return None
+
+    playing_menu(
+        ui,
+        header,
+        actions,
+        lambda: bool((NOW_PLAYING[0] or {}).get("pausable")),
+        handle,
+        stop_shared,
+        goodbye,
+    )
 
 
 def _run_mode(cfg, ui, choice, stop, play_mpv, goodbye, on_esc="quit"):
@@ -1388,13 +1538,14 @@ def _run_mode(cfg, ui, choice, stop, play_mpv, goodbye, on_esc="quit"):
 
 
 def _run_mode_loop(cfg, ui, dest, stop, play_mpv, goodbye, on_esc="quit"):
-    """Run a mode; follow g-jumps until a normal return or Home."""
+    """Run a mode; follow go-to jumps. True means the user went Home."""
     while dest is not None:
         try:
             _run_mode(cfg, ui, dest, stop, play_mpv, goodbye, on_esc=on_esc)
-            break
+            return False
         except GoTo as g:
-            dest = GO_TO_LABELS.get(g.dest)  # "home" → None → caller
+            dest = GO_TO_LABELS.get(g.dest)
+    return True
 
 
 def run_fzf(cfg, mode=None):
@@ -1403,7 +1554,7 @@ def run_fzf(cfg, mode=None):
 
     def goodbye():
         stop_shared()
-        print(f"\n  {c(C.DIM, 'Goodbye! 👋')}\n")
+        print(f"\n  {c(C.DIM, 'Goodbye!')}\n")
 
     def _clean_exit(sig, frame):
         stop_shared()
@@ -1414,8 +1565,8 @@ def run_fzf(cfg, mode=None):
 
     if mode in ("radio", "stations", "news"):
         dest = {"radio": "Presets", "stations": "Radio", "news": "News"}[mode]
-        _run_mode_loop(cfg, ui, dest, stop_shared, play_mpv, goodbye)
-        return
+        if not _run_mode_loop(cfg, ui, dest, stop_shared, play_mpv, goodbye):
+            return
 
     while True:
         clear_screen()
@@ -1423,29 +1574,20 @@ def run_fzf(cfg, mode=None):
         if player_active():
             entries.insert(0, "▶ Now Playing")
         entries.append("Exit")
-        idx = ui.pick(entries, "main ❯ ", "yt-cli · saved / search / history", "50%")
+        header = "yt-cli · saved / search / history"
+        if player_active():
+            header += "\nExit leaves playback running"
+        idx = ui.pick(entries, "main ❯ ", header, "50%")
         if idx is None:
-            goodbye()
+            print(f"\n  {c(C.DIM, 'Goodbye!')}\n")
             return
         choice = entries[idx]
         if choice == "Exit":
-            if player_active():
-                act = ui.action(
-                    ["Player is still running.", "─" * 44],
-                    [("detach (keeps playing)", "d"), ("exit (stops player)", "s")],
-                )
-                if act == "d":
-                    print(
-                        f"\n  {c(C.GREEN, '▶')}  {c(C.DIM, 'detached · playing in background')}\n"
-                    )
-                    return
-                if act != "s":
-                    continue  # Esc → cancel
-            goodbye()
+            print(f"\n  {c(C.DIM, 'Goodbye!')}\n")
             return
         if choice == "▶ Now Playing":
             try:
-                now_playing_screen(cfg, ui)
+                now_playing_screen(load_config(), ui)
             except GoTo as g:
                 if g.dest != "home":
                     _run_mode_loop(
@@ -1710,13 +1852,19 @@ def attach_detached():
         NOW_PLAYING[0] = {
             "title": title or station.get("name") or path,
             "kind": "station",
+            "source": "radio",
+            "status": "radio",
             "pausable": False,
+            "save_item": {**station, "kind": "station"},
             "replay": lambda: relaunch_detached(path),
         }
     else:
         NOW_PLAYING[0] = {
             "title": title or path,
+            "source": "detached",
+            "status": "video",
             "pausable": True,
+            "save_item": {"title": title or path, "url": path, "kind": "video"},
             "replay": lambda: relaunch_detached(path),
         }
     ATTACHED[0] = True
@@ -2320,7 +2468,10 @@ def run_radio_mode(cfg, ui, stop, play_mpv, goodbye, on_esc="quit", initial_slug
         stop()
         NOW_PLAYING[0] = {
             "title": info["name"],
+            "source": info.get("category") or "preset",
+            "status": "preset",
             "pausable": True,
+            "save_item": {"title": info["name"], "url": info["url"], "kind": "video"},
             "replay": lambda: play_radio(info),
         }
         cmd = build_mpv_cmd(info["url"], settings, preset_overrides=info)
@@ -2407,6 +2558,8 @@ def run_radio_mode(cfg, ui, stop, play_mpv, goodbye, on_esc="quit", initial_slug
         slug, info = result
         play_radio(info)
         radio_playing_loop(cfg, ui, info, settings, stop, play_radio, goodbye)
+        cfg = load_config()
+        settings, presets = load_radio_cfg(cfg)
 
 
 def radio_playing_loop(cfg, ui, info, settings, stop_fn, play_fn, goodbye_fn):
@@ -2427,26 +2580,29 @@ def radio_playing_loop(cfg, ui, info, settings, stop_fn, play_fn, goodbye_fn):
             }
         )
 
-    while True:
-        header_lines = [
+    def header():
+        lines = [
             f"▶  {c(C.BOLD, info['name'])}",
-            f"   {c(C.DIM, 'Video')} : "
+            f"   {c(C.DIM, 'Source')} : {info.get('category') or 'preset'}   "
+            f"{c(C.DIM, 'Video')} : "
             f"{c(C.DIM, 'suppressed') if settings['no_video'] else c(C.GREEN, 'on')}   "
             f"{c(C.DIM, 'Loop')} : "
             f"{c(C.GREEN, 'on') if settings['loop'] else c(C.DIM, 'off')}",
         ]
         if PLAYER_PROC[0] is not None and PLAYER_PROC[0].poll() is not None:
-            header_lines.append(f"   {c(C.YELLOW, '⚠  Player exited.')}")
-        actions = (
-            PLAY_ACTIONS_RADIO
-            if info.get("is_search_result")
-            else [a for a in PLAY_ACTIONS_RADIO if a[1] != "k"]
-        )
-        action = ui.action(header_lines, with_pause(actions))
-        if action == "o":
-            return False  # back to preset list, keep playing
-        elif action == "u":
-            toggle_pause()
+            lines.append(f"   {c(C.YELLOW, '⚠  Player exited.')}")
+        return lines
+
+    def actions():
+        if info.get("is_search_result") and not saved_item(
+            cfg, {"kind": "video", "url": info.get("url")}
+        ):
+            return PLAY_ACTIONS_RADIO
+        return [a for a in PLAY_ACTIONS_RADIO if a[1] != "k"]
+
+    def handle(action):
+        if action == "r":
+            play_fn(info)
         elif action == "v":
             nv, live = toggle_video_setting()
             settings["no_video"] = nv
@@ -2466,23 +2622,14 @@ def radio_playing_loop(cfg, ui, info, settings, stop_fn, play_fn, goodbye_fn):
             save_current(
                 cfg, ui, {"title": info["name"], "url": info["url"]}, default_kind="preset"
             )
-        elif action == "g":
-            dest = go_to_picker(ui)
-            if dest:
-                raise GoTo(dest)
         elif action == "s":
             run_search_mode(cfg, ui, stop_fn, play_search, return_home=True)
         elif action == "h":
             run_history_screen(cfg, ui, stop_fn, play_search)
-        elif action == "d":
-            print(f"\n  {c(C.GREEN, '▶')}  {c(C.DIM, 'detached · playing in background')}\n")
-            sys.exit(0)
-        elif action == "q":
-            stop_fn()
-            return True
-        elif action == "x":
-            goodbye_fn()
-            sys.exit(0)
+        return None
+
+    result = playing_menu(ui, header, actions, lambda: True, handle, stop_fn, goodbye_fn)
+    return result == "stop"
 
 
 # ---------- MODE: STATIONS (real internet radio) ----------
@@ -2861,7 +3008,10 @@ def _station_play(cfg, station, stop_fn=stop_shared):
     NOW_PLAYING[0] = {
         "title": title,
         "kind": "station",
+        "source": "radio",
+        "status": "radio",
         "pausable": False,
+        "save_item": {**station, "kind": "station"},
         "replay": lambda: _station_play(cfg, station, stop_fn),
     }
     proc, end_state = _station_launch(station)
@@ -3066,15 +3216,14 @@ def manage_stations_screen(cfg, ui):
 
 
 PLAY_ACTIONS_STATION = [
-    ("other results", "o"),
-    ("new search", "s"),
+    ("go to", "g"),
     ("history", "h"),
+    ("new search", "s"),
     ("replay", "r"),
-    ("go to…", "g"),
-    ("stop", "q"),
-    ("exit", "x"),
     ("save", "k"),
+    ("stop", "q"),
     ("detach", "d"),
+    ("exit", "x"),
 ]
 
 
@@ -3101,32 +3250,33 @@ def station_song_title(station):
 
 
 def station_playing_loop(cfg, ui, station, stop_fn, play_fn, goodbye_fn):
-    while True:
+    def header():
         name = station.get("name") or station.get("url", "")
         tags = ", ".join(station.get("tags") or [])[:40] or "-"
         codec = station.get("codec") or "?"
         bitrate = f"{station['bitrate']}k" if station.get("bitrate") else "-"
-        header_lines = [
+        lines = [
             f"▶  {c(C.BOLD, name[:60])}",
-            f"   {c(C.DIM, 'Country')} : "
-            f"{station.get('countrycode') or '--'}   "
+            f"   {c(C.DIM, 'Source')} : radio   "
+            f"{c(C.DIM, 'Country')} : {station.get('countrycode') or '--'}   "
             f"{c(C.DIM, 'Codec')} : {codec}   "
             f"{c(C.DIM, 'Bitrate')} : {bitrate}",
             f"   {c(C.DIM, tags)}",
         ]
         song = station_song_title(station)
         if song and song != name:
-            header_lines.insert(1, f"   {c(C.DIM, '♪')}  {song[:60]}")
+            lines.insert(1, f"   {c(C.DIM, '♪')}  {song[:60]}")
         if PLAYER_PROC[0] is not None and PLAYER_PROC[0].poll() is not None:
-            header_lines.append(f"   {c(C.YELLOW, '⚠  Player exited.')}")
-        actions = (
-            PLAY_ACTIONS_STATION
-            if not station.get("slug")
-            else [a for a in PLAY_ACTIONS_STATION if a[1] != "k"]
-        )
-        action = ui.action(header_lines, actions)
-        if action == "o":
-            return False
+            lines.append(f"   {c(C.YELLOW, '⚠  Player exited.')}")
+        return lines
+
+    def actions():
+        if not station.get("slug"):
+            return PLAY_ACTIONS_STATION
+        return [a for a in PLAY_ACTIONS_STATION if a[1] != "k"]
+
+    def handle(action):
+        nonlocal station
         if action == "s":
             q = ui.query(["Radio · search radio-browser.info", "─" * 48, "Esc → back"])
             if q and q.strip():
@@ -3138,29 +3288,18 @@ def station_playing_loop(cfg, ui, station, stop_fn, play_fn, goodbye_fn):
                 if new_station:
                     station = new_station
                     play_fn(station)
-            continue
-        if action == "h":
+        elif action == "h":
             run_history_screen(cfg, ui, stop_fn, _search_play_default(cfg))
         elif action == "r":
             play_fn(station)
-        elif action == "g":
-            dest = go_to_picker(ui)
-            if dest:
-                raise GoTo(dest)
         elif action == "k":
             slug = prompt_save_station(cfg, ui, station)
             if slug and not station.get("slug"):
                 station = {**station, "slug": slug}
-            cfg = load_config()
-        elif action == "d":
-            print(f"\n  {c(C.GREEN, '▶')}  {c(C.DIM, 'detached · playing in background')}\n")
-            sys.exit(0)
-        elif action == "q":
-            stop_fn()
-            return True
-        elif action == "x":
-            goodbye_fn()
-            sys.exit(0)
+        return None
+
+    result = playing_menu(ui, header, actions, lambda: False, handle, stop_fn, goodbye_fn)
+    return result == "stop"
 
 
 def run_stations_mode(cfg, ui, stop, goodbye, on_esc="quit", initial_slug=None):
@@ -3271,6 +3410,31 @@ def news_toggle_source(cfg, sid, enable):
 
 def get_all_sources_from_config(cfg):
     return [dict(s) for s in cfg["news"]["sources"]]
+
+
+def saved_item(cfg, item):
+    kind = (item or {}).get("kind")
+    if kind == "channel":
+        return bool((item or {}).get("source_id")) or (
+            source_id_for_channel(cfg, (item or {}).get("channel_id")) is not None
+        )
+    url = (item or {}).get("url") or ""
+    if kind == "station":
+        return any(
+            isinstance(station, dict) and station.get("url") == url
+            for station in cfg.get("stations") or []
+        )
+    return any(preset.get("url") == url for preset in (cfg.get("radio") or {}).get("presets") or [])
+
+
+def source_id_for_channel(cfg, channel_id):
+    if not channel_id:
+        return None
+    _settings, sources = load_news_cfg(cfg)
+    for source_id, info in sources.items():
+        if info.get("channel_id") == channel_id:
+            return source_id
+    return None
 
 
 # ---------- SAVED CATALOG ----------
@@ -3448,7 +3612,7 @@ def run_saved_mode(cfg, ui, kind=None, stop=None, goodbye=None, on_esc="quit"):
 
         def default_goodbye():
             stop()
-            print(f"\n  {c(C.DIM, 'Goodbye! 👋')}\n")
+            print(f"\n  {c(C.DIM, 'Goodbye!')}\n")
 
         goodbye = default_goodbye
 
@@ -4208,18 +4372,6 @@ def detect_player():
     return None
 
 
-def list_players():
-    """Return list of installed players."""
-    found = []
-    for p in ["mpv", "vlc", "ffplay"]:
-        try:
-            subprocess.run(["which", p], capture_output=True, check=True)
-            found.append(p)
-        except (subprocess.CalledProcessError, FileNotFoundError):
-            continue
-    return found
-
-
 def launch_news_player(url, player, quality="720", direct_url=None):
     """Launch player as background process. Returns Popen object.
     mpv gets the watch URL (yt-dlp handles YouTube live properly);
@@ -4334,7 +4486,7 @@ def pick_stream(streams, source_name, ui):
         if action == "r":
             return "retry"
         return None
-    lines = [format_stream_row(stream) for stream in streams]
+    lines = ["  ↻  refresh streams"] + [format_stream_row(stream) for stream in streams]
     live_count = sum(1 for stream in streams if stream.get("status") == "live")
     upcoming_count = sum(1 for stream in streams if stream.get("status") == "upcoming")
     if live_count:
@@ -4351,18 +4503,9 @@ def pick_stream(streams, source_name, ui):
     )
     if idx is None:
         return None
-    return streams[idx]
-
-
-def pick_player(current_player, ui):
-    players = list_players()
-    if not players:
-        return None
-    lines = [f"{'▶ ' if p == current_player else '  '}{p}" for p in players]
-    idx = ui.pick(lines, "player ❯ ", "Select player\n" + "─" * 44, "30%")
-    if idx is None:
-        return None
-    return players[idx]
+    if idx == 0:
+        return "retry"
+    return streams[idx - 1]
 
 
 def confirm_search(query, ui):
@@ -4490,10 +4633,27 @@ def run_news_mode(cfg, ui, stop, goodbye, on_esc="quit", initial_source=None):
     def play_news(stream, source_info=None):
         stop()
         kind = "channel" if (source_info or {}).get("channel_id") else "video"
+        save_item = {
+            "title": stream["title"],
+            "url": stream["url"],
+            "uploader": stream.get("source"),
+            "kind": kind,
+            "channel_id": (source_info or {}).get("channel_id", ""),
+            "source_id": (source_info or {}).get("id", ""),
+            "channel_name": (source_info or {}).get("channel_name")
+            or (source_info or {}).get("name"),
+            "keywords": (source_info or {}).get("keywords"),
+            "fallback_url": (source_info or {}).get("fallback_url"),
+        }
         NOW_PLAYING[0] = {
             "title": stream["title"],
+            "source": stream.get("source") or "YouTube",
+            "status": stream.get("status") or ("live" if stream.get("is_live") else "past"),
             "kind": kind,
             "pausable": stream_pausable(stream),
+            "channel_id": (source_info or {}).get("channel_id", ""),
+            "source_id": (source_info or {}).get("id", ""),
+            "save_item": save_item,
             "replay": lambda: play_news(stream, source_info),
         }
         clear_screen()
@@ -4564,20 +4724,33 @@ def run_news_mode(cfg, ui, stop, goodbye, on_esc="quit", initial_source=None):
                     ui.info(["❌ No player found (mpv / vlc / ffplay)."])
                     continue
                 play_news(stream)
-                while True:
+
+                def url_header():
                     st = current_stream[0]
-                    action = ui.action(
-                        [
-                            f"▶  {c(C.BOLD, st['title'])}",
-                            f"   {c(C.DIM, 'Source')}  : {st['source']}",
-                            "─" * 44,
-                        ],
-                        with_pause(PLAY_ACTIONS_NEWS, not st.get("is_live")),
-                    )
+                    lines = [
+                        f"▶  {c(C.BOLD, st['title'])}",
+                        f"   {c(C.DIM, 'Source')}  : {st['source']}",
+                        f"   {c(C.DIM, 'Status')}  : {render_stream_badge(st)}",
+                    ]
+                    if PLAYER_PROC[0] is not None and PLAYER_PROC[0].poll() is not None:
+                        lines.append(f"   {c(C.YELLOW, '⚠  Player exited.')}")
+                    return lines
+
+                def url_actions():
+                    current = current_stream[0]
+                    actions = [a for a in PLAY_ACTIONS_NEWS if a[1] != "f"]
+                    if saved_item(cfg, {"kind": "video", "url": current.get("url", "")}):
+                        actions = [a for a in actions if a[1] != "k"]
+                    return actions
+
+                def url_handle(action):
+                    st = current_stream[0]
                     if action == "r":
                         play_news(st)
-                    elif action == "u":
-                        toggle_pause()
+                    elif action == "v":
+                        nv, live = toggle_video_setting()
+                        if not live:
+                            play_news(st)
                     elif action == "k":
                         save_current(
                             cfg,
@@ -4585,23 +4758,21 @@ def run_news_mode(cfg, ui, stop, goodbye, on_esc="quit", initial_source=None):
                             {"title": st["title"], "url": st["url"], "uploader": st.get("source")},
                             default_kind="news",
                         )
-                    elif action == "g":
-                        dest = go_to_picker(ui)
-                        if dest:
-                            raise GoTo(dest)
-                    elif action == "d":
-                        print(
-                            f"\n  {c(C.GREEN, '▶')}  {c(C.DIM, 'detached · playing in background')}\n"
-                        )
-                        sys.exit(0)
-                    elif action == "q":
-                        stop()
-                        break
-                    elif action == "x":
-                        goodbye()
-                        sys.exit(0)
-                    else:  # o/s/h/p/f → back to source list
-                        break
+                    elif action == "s":
+                        run_search_mode(cfg, ui, stop, _search_play_default(cfg), return_home=True)
+                    elif action == "h":
+                        run_history_screen(cfg, ui, stop, _search_play_default(cfg))
+                    return None
+
+                playing_menu(
+                    ui,
+                    url_header,
+                    url_actions,
+                    lambda: not stream.get("is_live"),
+                    url_handle,
+                    stop,
+                    goodbye,
+                )
             continue
 
         source_info: dict = {}
@@ -4621,7 +4792,8 @@ def run_news_mode(cfg, ui, stop, goodbye, on_esc="quit", initial_source=None):
             raw_info = result[1] if isinstance(result, tuple) else None
             if not isinstance(raw_info, dict):
                 continue
-            source_info = raw_info
+            source_info = dict(raw_info)
+            source_info["id"] = result[0]
             is_search_result = False
 
         while True:
@@ -4648,6 +4820,13 @@ def run_news_mode(cfg, ui, stop, goodbye, on_esc="quit", initial_source=None):
                         if item.get("status") != "past"
                         or item.get("hours_ago", 9999) <= settings["recent_hours"]
                     ]
+                    for item in cached_streams:
+                        if not item.get("source"):
+                            item["source"] = (
+                                source_info.get("channel_name")
+                                or source_info.get("name")
+                                or channel_id
+                            )
             except ChannelError as exc:
                 sp.fail(str(exc))
                 action = ui.action(
@@ -4695,51 +4874,35 @@ def run_news_mode(cfg, ui, stop, goodbye, on_esc="quit", initial_source=None):
 
                 play_news(chosen, source_info)
 
-                go_to_main_from_playing = False
-                refetch_from_playing = False
-
-                while True:
+                def channel_header():
                     stream = current_stream[0]
-                    status = render_stream_badge(stream)
-                    header_lines = [
+                    lines = [
                         f"▶  {c(C.BOLD, stream['title'])}",
                         f"   {c(C.DIM, 'Source')}  : {stream['source']}",
-                        f"   {c(C.DIM, 'Status')}  : {status}",
+                        f"   {c(C.DIM, 'Status')}  : {render_stream_badge(stream)}",
                         f"   {c(C.DIM, 'Quality')} : {settings['quality']}p  "
                         f"{c(C.DIM, 'Player')} : {pl}",
                     ]
                     if PLAYER_PROC[0] is not None and PLAYER_PROC[0].poll() is not None:
-                        header_lines.append(
+                        lines.append(
                             f"   {c(C.YELLOW, '⚠  Player exited: stream may have ended.')}"
                         )
-                    action = ui.action(
-                        header_lines, with_pause(PLAY_ACTIONS_NEWS, stream_pausable(stream))
-                    )
+                    return lines
 
-                    if action == "o":
-                        break  # stream list, player keeps playing
+                def channel_handle(action):
+                    stream = current_stream[0]
+                    if action == "r":
+                        play_news(stream, source_info)
+                    elif action == "v":
+                        nv, live = toggle_video_setting()
+                        if not live:
+                            play_news(stream, source_info)
                     elif action == "s":
                         run_search_mode(cfg, ui, stop, _search_play_default(cfg), return_home=True)
                     elif action == "h":
                         run_history_screen(cfg, ui, stop, _search_play_default(cfg))
-                    elif action == "r":
-                        play_news(stream)
-                    elif action == "u":
-                        toggle_pause()
-                    elif action == "f":
-                        stop()
-                        refetch_from_playing = True
-                        break
-                    elif action == "p":
-                        new_player = pick_player(pl, ui)
-                        if new_player and new_player != pl:
-                            player[0] = new_player
-                            st = load_state()
-                            st["news"]["player"] = new_player
-                            save_state(st)
-                            play_news(stream)
                     elif action == "k":
-                        save_current(
+                        slug = save_current(
                             cfg,
                             ui,
                             {
@@ -4755,30 +4918,26 @@ def run_news_mode(cfg, ui, stop, goodbye, on_esc="quit", initial_source=None):
                             },
                             default_kind="news",
                         )
-                    elif action == "g":
-                        dest = go_to_picker(ui)
-                        if dest:
-                            raise GoTo(dest)
-                    elif action == "d":
-                        print(
-                            f"\n  {c(C.GREEN, '▶')}  {c(C.DIM, 'detached · playing in background')}\n"
-                        )
-                        sys.exit(0)
-                    elif action == "q":
-                        stop()
-                        break
-                    elif action == "x":
-                        goodbye()
-                        return
+                        if slug and not source_info.get("id"):
+                            source_info["id"] = slug
+                    return None
 
+                def channel_actions():
+                    if source_info.get("id"):
+                        return [a for a in PLAY_ACTIONS_NEWS if a[1] != "k"]
+                    return PLAY_ACTIONS_NEWS
+
+                result = playing_menu(
+                    ui,
+                    channel_header,
+                    channel_actions,
+                    lambda: stream_pausable(current_stream[0]),
+                    channel_handle,
+                    stop,
+                    goodbye,
+                )
                 cfg = load_config()
                 settings, sources = load_news_cfg(cfg)
-
-                if go_to_main_from_playing:
-                    go_back_to_main = True
-                    break
-                if refetch_from_playing:
-                    break
 
             if go_back_to_main:
                 if single_source:
@@ -4975,7 +5134,10 @@ def _radio_cli_main():
     args = sys.argv[1:]
 
     if not args:
-        run_fzf(cfg, mode="radio")
+        if find_fzf():
+            run_fzf(cfg, mode="radio")
+        else:
+            run_curses(cfg, mode="radio")
         return
 
     if args[0] in ("--help", "-h", "help"):
@@ -5026,7 +5188,10 @@ def _news_cli_main():
     args = sys.argv[1:]
 
     if not args:
-        run_fzf(cfg, mode="news")
+        if find_fzf():
+            run_fzf(cfg, mode="news")
+        else:
+            run_curses(cfg, mode="news")
         return
 
     if args[0] in ("--help", "-h", "help"):
@@ -5190,7 +5355,10 @@ def run_stations_cli():
     args = sys.argv[1:]
 
     if not args:
-        run_fzf(cfg, mode="stations")
+        if find_fzf():
+            run_fzf(cfg, mode="stations")
+        else:
+            run_curses(cfg, mode="stations")
         return
 
     if args[0] in ("--help", "-h", "help"):
@@ -5247,38 +5415,33 @@ def _curses_main(stdscr, cfg, mode):
 
     def goodbye():
         stop_shared()
-        _curses_ui_message(stdscr, ["Goodbye! 👋"])
+        _curses_ui_message(stdscr, ["Goodbye!"])
 
     if mode in ("radio", "stations", "news"):
         dest = {"radio": "Presets", "stations": "Radio", "news": "News"}[mode]
-        _run_mode_loop(cfg, ui, dest, stop_shared, play_mpv, goodbye)
-        return
+        if not _run_mode_loop(cfg, ui, dest, stop_shared, play_mpv, goodbye):
+            return
 
-    detached = False
     while True:
         entries = ["Saved", "Search", "History"]
         if player_active():
             entries.insert(0, "▶ Now Playing")
         entries.append("Exit")
-        idx = ui.pick(entries, "main ❯ ", "yt-cli · saved / search / history", "50%")
+        idx = ui.pick(
+            entries,
+            "main ❯ ",
+            "yt-cli · saved / search / history"
+            + ("\nExit leaves playback running" if player_active() else ""),
+            "50%",
+        )
         if idx is None:
             break
         choice = entries[idx]
         if choice == "Exit":
-            if player_active():
-                act = ui.action(
-                    ["Player is still running.", "─" * 44],
-                    [("detach (keeps playing)", "d"), ("exit (stops player)", "s")],
-                )
-                if act == "d":
-                    detached = True
-                    break
-                if act != "s":
-                    continue
             break
         if choice == "▶ Now Playing":
             try:
-                now_playing_screen(cfg, ui)
+                now_playing_screen(load_config(), ui)
             except GoTo as g:
                 if g.dest != "home":
                     _run_mode_loop(
@@ -5292,8 +5455,7 @@ def _curses_main(stdscr, cfg, mode):
                     )
             continue
         _run_mode_loop(cfg, ui, choice, stop_shared, play_mpv, goodbye, on_esc="home")
-    if not detached:
-        goodbye()
+    _curses_ui_message(stdscr, ["Goodbye!"])
 
 
 def _curses_ui_message(stdscr, lines):
@@ -5363,7 +5525,7 @@ if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
-        print("\n\n👋 Goodbye!")
+        print("\n\nGoodbye!")
         sys.exit(0)
     except Exception as e:
         print(f"\n❌ Error: {e}")

@@ -7,3 +7,4 @@ venv/
 *.sublime-workspace/
 tests/e2e/probe_dump.txt
 .pi/
+tests/e2e/.config_backup_e.json

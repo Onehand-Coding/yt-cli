@@ -69,7 +69,7 @@ directly at the wrapper file — still correct. E2E harness: `tests/e2e/`. Proje
   `play_fn`. (Bug found by E2E — `KeyError: 'name'`.)
 - **Action-menu labels must have unique filter keys per key letter.** fzf
   ranks matches by position/length, so a key like `p` that appears in multiple
-  labels picks the WRONG action. NEWS menu: `"player"` is now `"change audio"`
+  labels picks the WRONG action. NEWS menu no longer has a player action; mpv is the default
   (p was needed for pause). Radio/Search tables were audited and are
   unambiguous. This bit AGAIN (2026-08-21): adding a `"save"` label made typing
   `s` select it over `"search"` (shorter line wins). The label is now `save`
@@ -86,7 +86,7 @@ directly at the wrapper file — still correct. E2E harness: `tests/e2e/`. Proje
 - Curses `pick` ignores the prompt arg (footer shows nav hints) — the action
   prompt "action ❯" is NOT drawn in curses mode; tests must wait on item text
   instead.
-- Curses `goodbye` shows a "Goodbye! 👋" message and blocks on a keypress.
+- Curses `goodbye` shows a "Goodbye!" message and blocks on a keypress.
 
 ## Gotchas
 
@@ -305,9 +305,16 @@ Spec: `docs/specs/2026-11-04-unified-saved-channels-design.md`.
   emit one row per show.
 - **Names:** internet radio is Radio (`[radio]`, manage then Radio); YouTube presets
   are Presets. Legacy flags: `--radio` opens presets, `--stations` opens radio.
-- **Playing actions:** `stop`, `detach`, `exit`. `pause`/`play` appears for VOD, replays,
-  search results, and presets; it is hidden for live news and radio. `change audio` is
-  the news output-player action.
+- **Playing screen:** one shared menu for search, presets, radio, channels, and Now
+  Playing. Esc returns to the parent list and keeps playback; `stop` stops and
+  returns there; `detach` exits and leaves the player running; `exit` stops and exits.
+  `pause`/`play` appears for VOD, replays, search results, and presets, and is hidden for
+  live news and radio. There is no back row; Esc backs out. The first row is `go to`. Refresh streams is
+  a row on the live list, not a playing action. `save` is hidden when the channel, preset, or station is
+  already saved; `channel` reopens the channel from Now Playing. Exit or Esc at main
+  closes the UI and leaves playback running; the header says so when a player is active.
+  Go-to Home from a direct `--radio`, `--stations`, or `--news` session opens the main
+  menu instead of exiting.
 - **Checks:** CI runs `ruff check .`, `pyright yt_cli.py`, and `pytest` on pushes to
   `main` and on pull requests. `yt_cli.py` is above 5000 lines, past pi-lens's LSP
   limit, so use the pyright CLI.
