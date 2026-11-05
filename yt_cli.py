@@ -4993,9 +4993,6 @@ USAGE:
     yt-cli --channels --config
     yt-cli --channels --help
 
-ALIAS:
-    --news / -n                    Same as --channels
-
 SAVED CHANNELS:""")
     for key, info in sorted(sources.items()):
         print(f"    {'✓' if info['enabled'] else '✗'}  {key:<25} - {info['name']}")
@@ -5055,7 +5052,7 @@ def parse_cli_flags(args):
             flags["background"] = True
         elif a in ("--fg", "--foreground"):
             flags["background"] = False
-        elif a in ("--mix", "--radio"):
+        elif a == "--mix":
             flags["radio"] = True
         elif a.startswith("--quality="):
             flags["quality"] = a.split("=")[1]
@@ -5135,6 +5132,10 @@ def _radio_cli_main():
     cfg = load_config()
     settings, presets = load_radio_cfg(cfg)
     args = sys.argv[1:]
+
+    if "--radio" in args:
+        print("❌ --radio is internet radio mode; use --mix for a YouTube mix.")
+        sys.exit(2)
 
     if not args:
         if find_fzf():
@@ -5339,9 +5340,6 @@ USAGE:
     yt-cli --radio --config
     yt-cli --radio --help
 
-ALIAS:
-    --stations / -s                     Same as --radio
-
 OPTIONS:
     --bg, --background     Run in background
     --fg, --foreground     Run in foreground
@@ -5476,9 +5474,18 @@ def _curses_ui_message(stdscr, lines):
 
 def main():
     args = sys.argv[1:]
-    stations_flag = bool(args) and args[0] in ("--radio", "-r", "--stations", "-s")
+    removed = {
+        "--news": "--channels",
+        "-n": "--channels",
+        "--stations": "--radio",
+        "-s": "--radio",
+    }
+    if args and args[0] in removed:
+        print(f"❌ {args[0]} was removed; use {removed[args[0]]}.")
+        sys.exit(2)
+    stations_flag = bool(args) and args[0] in ("--radio", "-r")
     presets_flag = bool(args) and args[0] in ("--presets", "-p")
-    channels_flag = bool(args) and args[0] in ("--channels", "-c", "--news", "-n")
+    channels_flag = bool(args) and args[0] in ("--channels", "-c")
     migrate_configs()
     script_name = Path(sys.argv[0]).name
     cfg = load_config()

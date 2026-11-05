@@ -304,7 +304,7 @@ Spec: `docs/specs/2026-11-04-unified-saved-channels-design.md`.
   default. Simulcast channels emit one stream per day; News5, True FM, and ABS-CBN News
   emit one row per show.
 - **Names:** internet radio is Radio (`[radio]`, manage then Radio); YouTube presets
-  are Presets. Canonical flags: `--presets`, `--radio`, `--channels`; `--stations` and `--news` are aliases.
+  are Presets. Canonical flags: `--presets`, `--radio`, `--channels`.
 - **Playing screen:** one shared menu for search, presets, radio, channels, and Now
   Playing. Esc returns to the parent list and keeps playback; `stop` stops and
   returns there; `detach` exits and leaves the player running; `exit` stops and exits.

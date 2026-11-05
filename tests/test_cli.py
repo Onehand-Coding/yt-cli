@@ -54,24 +54,8 @@ def test_channels_help_exits_zero():
     not shutil.which("mpv") or not shutil.which("yt-dlp"),
     reason="mpv and yt-dlp required for check_dependencies",
 )
-def test_news_alias_help_exits_zero():
-    r = run("--news", "--help")
-    assert r.returncode == 0
-    out = (r.stdout + r.stderr).lower()
-    assert "channels" in out and "news" in out
-
-
-@pytest.mark.skipif(not shutil.which("mpv"), reason="mpv required for check_dependencies")
 def test_radio_help_exits_zero():
     r = run("--radio", "--help")
-    assert r.returncode == 0
-    out = (r.stdout + r.stderr).lower()
-    assert "radio" in out and "radio-browser" in out
-
-
-@pytest.mark.skipif(not shutil.which("mpv"), reason="mpv required for check_dependencies")
-def test_stations_alias_help_exits_zero():
-    r = run("--stations", "--help")
     assert r.returncode == 0
     out = (r.stdout + r.stderr).lower()
     assert "radio" in out and "radio-browser" in out
@@ -86,19 +70,33 @@ def test_radio_list_exits_zero():
 
 
 @pytest.mark.skipif(not shutil.which("mpv"), reason="mpv required for check_dependencies")
-def test_stations_alias_list_exits_zero():
-    r = run("--stations", "--list")
+def test_channels_list_exits_zero():
+    r = run("--channels", "--list")
     assert r.returncode == 0
     out = (r.stdout + r.stderr).lower()
-    assert "radio" in out
+    assert "channels" in out
+
+
+def test_removed_news_flag_explains_replacement():
+    r = run("--news", "--help")
+    assert r.returncode == 2
+    out = (r.stdout + r.stderr).lower()
+    assert "removed" in out and "--channels" in out
+
+
+def test_removed_stations_flag_explains_replacement():
+    r = run("--stations", "--help")
+    assert r.returncode == 2
+    out = (r.stdout + r.stderr).lower()
+    assert "removed" in out and "--radio" in out
 
 
 @pytest.mark.skipif(
     not shutil.which("mpv") or not shutil.which("yt-dlp"),
     reason="mpv and yt-dlp required for check_dependencies",
 )
-def test_channels_list_exits_zero():
-    r = run("--channels", "--list")
-    assert r.returncode == 0
+def test_preset_radio_seed_is_rejected():
+    r = run("--presets", "--radio")
+    assert r.returncode == 2
     out = (r.stdout + r.stderr).lower()
-    assert "channels" in out
+    assert "--mix" in out

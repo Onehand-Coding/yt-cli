@@ -16,7 +16,6 @@ The application is Python standard library only. It uses `mpv`, `yt-dlp`, and
 | `yt-cli --channels` | Saved, filtered to YouTube channels |
 | `~/.local/bin/music/<name>` | A saved preset or radio station |
 
-`--stations` is an alias for `--radio`; `--news` is an alias for `--channels`.
 
 ## Channels
 
