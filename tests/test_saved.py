@@ -292,3 +292,10 @@ def test_playing_tables_have_back_and_no_other():
         assert "go to" in labels
         assert "←" not in labels
         assert not any(label.startswith("other ") for label in labels)
+
+
+def test_parse_cli_flags_accepts_mix_and_radio_alias():
+    flags, _ = yt_cli.parse_cli_flags(["--mix"])
+    assert flags["radio"] is True
+    flags, _ = yt_cli.parse_cli_flags(["--radio"])
+    assert flags["radio"] is True

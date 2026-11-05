@@ -5055,7 +5055,7 @@ def parse_cli_flags(args):
             flags["background"] = True
         elif a in ("--fg", "--foreground"):
             flags["background"] = False
-        elif a == "--radio":
+        elif a in ("--mix", "--radio"):
             flags["radio"] = True
         elif a.startswith("--quality="):
             flags["quality"] = a.split("=")[1]
@@ -5109,7 +5109,7 @@ OPTIONS:
     --no-loop                   Don't loop
     --bg, --background          Run in background
     --fg, --foreground          Run in foreground
-    --radio                     Seed a YouTube radio mix (preset option)
+    --mix                       Seed a YouTube radio mix (preset option)
     --quality=<n>               Cap video height (default 720, from config)
     --shuffle                   Shuffle playlist
 
