@@ -489,7 +489,11 @@ class FzfUI:
         query, chosen, escaped = fzf_pick(
             labels,
             prompt="action ❯ ",
-            header="\n".join(header_lines) + "\n" + "─" * 44,
+            header="\n".join(header_lines)
+            + "\n"
+            + c(C.DIM, "Esc → back   ·   q stop")
+            + "\n"
+            + "─" * 44,
             height="55%",
             capture_query=True,
         )  # type: ignore[misc]
@@ -1243,10 +1247,10 @@ def with_pause(actions, pausable=True):
         return actions
     out = []
     for action in actions:
-        if action[1] == "q" and pause:
+        out.append(action)
+        if action[1] == "r" and pause:
             out.append(pause)
             pause = None
-        out.append(action)
     if pause:
         out.append(pause)
     return out
@@ -1256,44 +1260,44 @@ def with_pause(actions, pausable=True):
 
 PLAY_ACTIONS_SEARCH = [
     ("back", "b"),
-    ("new search", "s"),
-    ("history", "h"),
-    ("replay video", "r"),
     ("go to…", "g"),
-    ("stop", "q"),
-    ("exit", "x"),
+    ("history", "h"),
+    ("new search", "s"),
+    ("replay", "r"),
     ("toggle video", "v"),
     ("save", "k"),
+    ("stop", "q"),
     ("detach", "d"),
+    ("exit", "x"),
 ]
 
 PLAY_ACTIONS_RADIO = [
     ("back", "b"),
-    ("search", "s"),
-    ("history", "h"),
-    ("replay", "r"),
     ("go to…", "g"),
-    ("stop", "q"),
-    ("exit", "x"),
+    ("history", "h"),
+    ("search", "s"),
+    ("replay", "r"),
     ("toggle video", "v"),
     ("toggle loop", "l"),
-    ("manage presets", "m"),
     ("save", "k"),
+    ("manage presets", "m"),
+    ("stop", "q"),
     ("detach", "d"),
+    ("exit", "x"),
 ]
 
 PLAY_ACTIONS_NEWS = [
     ("back", "b"),
-    ("search", "s"),
-    ("history", "h"),
-    ("replay", "r"),
     ("go to…", "g"),
-    ("stop", "q"),
-    ("exit", "x"),
+    ("history", "h"),
+    ("search", "s"),
+    ("replay", "r"),
     ("change audio", "p"),
     ("refresh streams", "f"),
     ("save", "k"),
+    ("stop", "q"),
     ("detach", "d"),
+    ("exit", "x"),
 ]
 
 
@@ -1476,17 +1480,18 @@ def now_playing_screen(cfg, ui):
     def actions():
         current = NOW_PLAYING[0] or {}
         kind = current.get("kind") or "video"
-        rows = [("back", "b"), ("replay", "r")]
-        if kind != "station":
-            rows.append(("toggle video", "v"))
+        rows = [("back", "b"), ("go to…", "g")]
         channel_id = current.get("channel_id")
         if channel_id and (
             current.get("source_id") or source_id_for_channel(cfg, channel_id)
         ):
             rows.append(("channel", "c"))
+        rows.append(("replay", "r"))
+        if kind != "station":
+            rows.append(("toggle video", "v"))
         if current.get("save_item"):
             rows.append(("save", "k"))
-        rows += [("go to…", "g"), ("stop", "q"), ("detach", "d"), ("exit", "x")]
+        rows += [("stop", "q"), ("detach", "d"), ("exit", "x")]
         return rows
 
     def handle(action):
@@ -3216,14 +3221,14 @@ def manage_stations_screen(cfg, ui):
 
 PLAY_ACTIONS_STATION = [
     ("back", "b"),
-    ("new search", "s"),
-    ("history", "h"),
-    ("replay", "r"),
     ("go to…", "g"),
-    ("stop", "q"),
-    ("exit", "x"),
+    ("history", "h"),
+    ("new search", "s"),
+    ("replay", "r"),
     ("save", "k"),
+    ("stop", "q"),
     ("detach", "d"),
+    ("exit", "x"),
 ]
 
 

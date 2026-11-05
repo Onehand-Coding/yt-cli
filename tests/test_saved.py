@@ -170,10 +170,15 @@ def test_stream_pausable_rules():
     assert yt_cli.stream_pausable({"title": "video"}) is True
 
 
-def test_with_pause_inserts_before_stop(monkeypatch):
+def test_with_pause_inserts_after_replay(monkeypatch):
     monkeypatch.setattr(yt_cli, "player_paused", lambda: False)
-    actions = [("start", "a"), ("stop", "q")]
-    assert yt_cli.with_pause(actions) == [("start", "a"), ("pause", "u"), ("stop", "q")]
+    actions = [("replay", "r"), ("save", "k"), ("stop", "q")]
+    assert yt_cli.with_pause(actions) == [
+        ("replay", "r"),
+        ("pause", "u"),
+        ("save", "k"),
+        ("stop", "q"),
+    ]
 
 
 def test_with_pause_uses_play_when_paused(monkeypatch):

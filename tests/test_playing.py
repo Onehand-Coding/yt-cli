@@ -197,3 +197,19 @@ def test_now_playing_actions_include_channel_and_save(monkeypatch):
     assert "stop" in labels
     assert "detach" in labels
     assert "exit" in labels
+
+
+def test_playing_tables_start_at_back_and_end_at_exit():
+    tables = [
+        yt_cli.PLAY_ACTIONS_SEARCH,
+        yt_cli.PLAY_ACTIONS_RADIO,
+        yt_cli.PLAY_ACTIONS_NEWS,
+        yt_cli.PLAY_ACTIONS_STATION,
+    ]
+    for table in tables:
+        labels = [label for label, _ in table]
+        assert labels[0] == "back"
+        assert labels[-3:] == ["stop", "detach", "exit"]
+
+    search = [label for label, _ in yt_cli.PLAY_ACTIONS_SEARCH]
+    assert search[1:5] == ["go to…", "history", "new search", "replay"]
