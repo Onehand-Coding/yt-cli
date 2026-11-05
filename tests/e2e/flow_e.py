@@ -103,6 +103,8 @@ def main():
         h.send("\x1b", 0.5)
         ok4 = h.wait_new("main ❯", 15)
         h.send("\x1b", 0.5)
+        if h.wait_new("Player is still running", 5):
+            h.send("s\r", 0.4)  # exit: stop the player
         ok4 &= h.wait_new("Goodbye", 10)
         check("clean exit", ok4)
     finally:

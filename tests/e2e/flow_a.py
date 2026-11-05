@@ -18,7 +18,7 @@ def flow_a():
     h.send("1\r", 0.4)
     ok &= h.wait_for("action", 8, silent=True)
     ok &= h.wait_for("playing", 60, silent=True)
-    h.send("o\r", 0.4)
+    h.send("\x1b", 0.4)
     ok &= h.wait_for("result", 8, silent=True)
     ok &= h.wait_for("AC/DC", 5, silent=True)
     h.send("\x1b", 0.4)

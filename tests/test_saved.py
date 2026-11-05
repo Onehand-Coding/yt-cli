@@ -273,3 +273,16 @@ def test_saving_a_preset_keeps_channels_saved_earlier(cfg_files, monkeypatch):
     saved = yt_cli.load_config()
     assert any(source["id"] == "news5" for source in saved["news"]["sources"])
     assert any(preset["slug"] == "e2e-preset" for preset in saved["radio"]["presets"])
+
+
+def test_playing_tables_have_back_and_no_other():
+    tables = [
+        yt_cli.PLAY_ACTIONS_SEARCH,
+        yt_cli.PLAY_ACTIONS_RADIO,
+        yt_cli.PLAY_ACTIONS_NEWS,
+        yt_cli.PLAY_ACTIONS_STATION,
+    ]
+    for table in tables:
+        labels = [label for label, _ in table]
+        assert "back" in labels
+        assert not any(label.startswith("other ") for label in labels)

@@ -23,7 +23,7 @@ def flow_d():
     h.send("acdc thunderstruck\r", 0.01)
     ok &= h.wait_new("results:", 90)
     h.send("\r", 0.4)
-    ok &= h.wait_new("other results", 8, silent=True)
+    ok &= h.wait_new("back", 8, silent=True)
     time.sleep(8)
     playing = mpv_alive()
     print(f"  {'[PASS]' if playing else '[FAIL]'} mpv running while action menu up")

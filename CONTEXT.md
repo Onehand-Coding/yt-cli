@@ -305,9 +305,14 @@ Spec: `docs/specs/2026-11-04-unified-saved-channels-design.md`.
   emit one row per show.
 - **Names:** internet radio is Radio (`[radio]`, manage then Radio); YouTube presets
   are Presets. Legacy flags: `--radio` opens presets, `--stations` opens radio.
-- **Playing actions:** `stop`, `detach`, `exit`. `pause`/`play` appears for VOD, replays,
-  search results, and presets; it is hidden for live news and radio. `change audio` is
-  the news output-player action.
+- **Playing screen:** one shared menu for search, presets, radio, channels, and Now
+  Playing. Esc or `back` returns to the parent list and keeps playback; `stop` stops and
+  returns there; `detach` exits and leaves the player running; `exit` stops and exits.
+  `pause`/`play` appears for VOD, replays, search results, and presets, and is hidden for
+  live news and radio. `change audio` is the news output action; `channel` reopens the
+  channel from Now Playing. Esc at main uses the detach/exit prompt when a player is
+  active. Go-to Home from a direct `--radio`, `--stations`, or `--news` session opens
+  the main menu instead of exiting.
 - **Checks:** CI runs `ruff check .`, `pyright yt_cli.py`, and `pytest` on pushes to
   `main` and on pull requests. `yt_cli.py` is above 5000 lines, past pi-lens's LSP
   limit, so use the pyright CLI.

@@ -133,7 +133,7 @@ type to filter saved · enter play · esc back
   opens station search.
 - Search results use the same columns. Selecting one plays it immediately and
   opens the station action menu.
-- Station action menu: other results, new search, history, replay, go to,
+- Station action menu: back, new search, history, replay, go to,
   stop, exit, save, detach. No video or loop actions.
 - A pasted HTTP(S) URL, including `.m3u` and `.pls`, can be played and saved.
 - Saving offers an optional `music/<slug>` symlink, matching YouTube presets.
