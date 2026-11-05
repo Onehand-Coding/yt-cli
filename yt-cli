@@ -1,21 +1,16 @@
 #!/usr/bin/env python3
-"""yt-cli — thin wrapper around yt_cli.
+"""yt-cli: dev launcher for the repo checkout.
 
-Dispatch depends on Path(sys.argv[0]).name (yt-cli → menu, music/<preset>
-→ radio preset). Python preserves argv[0] as invoked, so this wrapper can
-stay transparent. Symlink chains resolve for sys.path[0], so `import yt_cli`
-works from ~/.local/bin/music/* → ../yt-cli → this file.
+The installed command is the `yt-cli` console script from pyproject.toml, which
+points at `yt_cli:cli`. This file stays as the repo launcher so a checkout can be
+symlinked into PATH, and so `music/<preset>` links have a stable target.
+
+Dispatch depends on Path(sys.argv[0]).name (yt-cli → menu, music/<preset> →
+radio preset). Python preserves argv[0] as invoked, so this wrapper can stay
+transparent. Symlink chains resolve for sys.path[0], so `import yt_cli` works
+from ~/.local/bin/music/* → ../yt-cli → this file.
 """
-from yt_cli import main
+from yt_cli import cli
 
 if __name__ == "__main__":
-    try:
-        main()
-    except KeyboardInterrupt:
-        print("\n\nGoodbye!")
-        raise SystemExit(0)
-    except Exception as e:
-        print(f"\n❌ Error: {e}")
-        import traceback
-        traceback.print_exc()
-        raise SystemExit(1)
+    cli()

@@ -31,6 +31,40 @@ PATH dispatch; `music/<preset>` symlinks chain through it and keep working).
 "Save preset → create symlink" resolves `argv[0]` fully, so new music links point
 directly at the wrapper file — still correct. E2E harness: `tests/e2e/`. Project docs: `docs/`.
 
+## Packaging and install (2026-11-05)
+
+Spec: `docs/specs/2026-11-05-packaging-design.md`. The wheel ships the module
+(`only-include = ["yt_cli.py"]`) and declares `[project.scripts] yt-cli =
+"yt_cli:cli"`; the `bypass-selection = true` flag that produced an empty wheel is
+gone. Install: `uv tool install git+https://github.com/Onehand-Coding/yt-cli`.
+The PyPI distribution is `yt-cli-player`, not `yt-cli`: PyPI rejects the latter as
+"too similar" to the existing `ytcli` project, and its pending-publisher form
+refuses to save it. The console script is still `yt-cli`, so the tool name and
+`uv tool upgrade yt-cli-player` are the only visible differences.
+`.github/workflows/release.yml` publishes on `v*` tags with trusted publishing;
+the PyPI pending publisher is GitHub `Onehand-Coding/yt-cli`, workflow
+`release.yml`, environment `pypi`.
+
+- `cli()` in yt_cli.py owns the KeyboardInterrupt/traceback guards; the repo
+  `yt-cli` wrapper and the `__main__` block both call it. `--version`/`-V`
+  prints `yt-cli <version>` before config migration or dependency checks.
+- uv installs the bin entry on Unix as a symlink to `<tool venv>/bin/yt-cli`, so
+  `music/<preset>` still presents `<preset>` as argv[0] and dispatch is
+  unchanged. The save-symlink code's `Path(sys.argv[0]).resolve()` lands on that
+  venv console script, a path stable across `uv tool upgrade`.
+- Version lives in two places (`yt_cli.__version__`, `project.version`);
+  `tests/test_packaging.py` asserts they match, that the wheel ships
+  `yt_cli.py`, that the entry point is `yt_cli:cli`, and that `--version` skips
+  config migration.
+- `check_dependencies` prints apt/dnf/pacman/brew lines for the missing
+  binaries. `fzf` stays optional.
+- The sdist is restricted to `only-include = ["yt_cli.py", "yt-cli",
+  "README.md", "LICENSE", "pyproject.toml"]`: `tests/e2e/bin` holds absolute
+  symlinks (`curl`, `mpv`) and uv refuses to unpack an sdist containing those.
+  CI runs `uv build` and smoke-tests the console script from the wheel.
+- Dev: `uv tool install --editable .` replaces a hand-made `~/.local/bin/yt-cli`
+  symlink; uv will not overwrite an existing executable without `--force`.
+
 ## Architecture
 
 - **UI abstraction** — `get_ui()` returns `FzfUI` or `CursesUI`; interface:

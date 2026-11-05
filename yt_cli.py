@@ -43,6 +43,8 @@ TUNE_CONFIG = Path.home() / ".config" / "tune" / "config.ini"
 NEWS_CONFIG = Path.home() / ".config" / "news-stream" / "config.ini"
 
 APP_NAME = "yt-cli"
+# Keep in sync with project.version in pyproject.toml (tests/test_packaging.py).
+__version__ = "1.1.0"
 COLORS = {"header": 0, "warn": 0, "footer": 0}
 
 
@@ -5136,7 +5138,14 @@ def check_dependencies(need_ytdlp=True):
     tools = ("mpv", "yt-dlp") if need_ytdlp else ("mpv",)
     missing = [tool for tool in tools if not shutil.which(tool)]
     if missing:
+        pkgs = " ".join(missing)
         print(f"error: required tool(s) not found on PATH: {', '.join(missing)}", file=sys.stderr)
+        print("install them with one of:", file=sys.stderr)
+        print(f"  Debian/Ubuntu  sudo apt install {pkgs}", file=sys.stderr)
+        print(f"  Fedora         sudo dnf install {pkgs}", file=sys.stderr)
+        print(f"  Arch           sudo pacman -S {pkgs}", file=sys.stderr)
+        print(f"  macOS          brew install {pkgs}", file=sys.stderr)
+        print("fzf is optional: without it yt-cli uses a curses menu.", file=sys.stderr)
         sys.exit(1)
 
 
@@ -5486,6 +5495,9 @@ def _curses_ui_message(stdscr, lines):
 
 def main():
     args = sys.argv[1:]
+    if args and args[0] in ("--version", "-V"):
+        print(f"{APP_NAME} {__version__}")
+        sys.exit(0)
     removed = {
         "--news": "--channels",
         "-n": "--channels",
@@ -5548,7 +5560,8 @@ def main():
                 pass
 
 
-if __name__ == "__main__":
+def cli():
+    """Entry point for the yt-cli console script and the repo launcher."""
     try:
         main()
     except KeyboardInterrupt:
@@ -5560,3 +5573,7 @@ if __name__ == "__main__":
 
         traceback.print_exc()
         sys.exit(1)
+
+
+if __name__ == "__main__":
+    cli()
