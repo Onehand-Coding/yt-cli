@@ -80,6 +80,10 @@ def display_width(text):
     return width
 
 
+def pad_display(text, width):
+    return text + " " * max(0, width - display_width(text))
+
+
 def truncate_display(text, limit):
     if display_width(text) <= limit:
         return text
@@ -2160,27 +2164,35 @@ def pick_search_result(results, query, ui):
     return results[idx]
 
 
+def format_preset_row(info, now_playing_name, name_width):
+    marker = C.PLAY if info["name"] == now_playing_name else " "
+    badge = (
+        "  🔍"
+        if info.get("is_search_result")
+        else f"  {c(C.DIM, '[' + info['category'] + ']')}"
+    )
+    name = pad_display(truncate_display(info["name"], name_width), name_width)
+    return f"  {marker}  {name}{badge}"
+
+
 def pick_preset(presets, now_playing_name, ui):
     categories = {}
     for slug, info in presets.items():
         categories.setdefault(info["category"], []).append((slug, info))
 
+    entries = [info for items in categories.values() for _, info in items]
+    name_width = min(36, max((display_width(info["name"]) for info in entries), default=0))
+
     lines = []
     index_map = []
     for cat, items in categories.items():
         for slug, info in items:
-            marker = f"{C.PLAY}" if info["name"] == now_playing_name else "  "
-            badge = (
-                "  🔍"
-                if info.get("is_search_result")
-                else f"  {c(C.DIM, '[' + info['category'] + ']')}"
-            )
-            lines.append(f"  {marker}  {info['name']}{badge}")
+            lines.append(format_preset_row(info, now_playing_name, name_width))
             index_map.append((slug, info))
     MANAGE = "manage presets"
     lines.append(f"  ⚙   {MANAGE}")
     header = (
-        "yt-cli · radio: select a preset or type to search\n"
+        "yt-cli · presets: select a preset or type to search\n"
         + "─" * 48
         + "\n"
         + "Esc → quit   ·   type a query to search YouTube Music"
