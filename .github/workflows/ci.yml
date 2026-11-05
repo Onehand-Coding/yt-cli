@@ -11,14 +11,18 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   test:
-    name: lint, types, tests
+    name: lint, types, tests (py${{ matrix.python-version }})
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.12"]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -26,7 +30,7 @@ jobs:
 
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python-version }}
 
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2  # v10.3.3
         with:
@@ -38,14 +42,51 @@ jobs:
       - name: Lint
         run: uv run --extra dev ruff check .
 
+      - name: Format
+        run: uv run --extra dev ruff format --check .
+
       - name: Type check
         run: uv run --extra dev pyright yt_cli.py
 
       - name: Tests
         run: uv run --extra dev pytest -q
 
+      # Building twice proves nothing; keep it on the newest interpreter.
       - name: Build sdist and wheel
+        if: matrix.python-version == '3.12'
         run: uv build
 
       - name: Smoke-test the console script
+        if: matrix.python-version == '3.12'
         run: uv run --no-project --isolated --with dist/*.whl yt-cli --version
+
+  # Only flow_f runs here: it is the one pty flow with no network and no
+  # playback. The search and preset flows need YouTube, which routinely
+  # bot-walls datacenter IPs, so they stay a local pre-release check.
+  e2e:
+    name: pty flow (radio, isolated HOME)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        with:
+          python-version: "3.12"
+
+      # mpv is required by check_dependencies, yt-dlp by the main menu path,
+      # fzf by the flow itself (it skips silently when either is missing).
+      - name: Install players
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends mpv fzf yt-dlp
+          command -v mpv fzf yt-dlp
+
+      - name: Radio flow with an isolated HOME
+        run: python3 flow_f.py
+        working-directory: tests/e2e
+        env:
+          TERM: xterm-256color
+          LANG: C.UTF-8

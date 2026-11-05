@@ -28,6 +28,22 @@ def test_shebang_is_python3():
     assert first == "#!/usr/bin/env python3"
 
 
+def test_help_exits_zero_without_extra_tools():
+    # No skipif on purpose: --help must work before check_dependencies runs,
+    # and the CI test job has no mpv or yt-dlp installed.
+    r = run("--help")
+    assert r.returncode == 0
+    out = (r.stdout + r.stderr).lower()
+    assert "usage" in out
+    assert "--channels" in out
+
+
+def test_short_help_alias():
+    r = run("-h")
+    assert r.returncode == 0
+    assert "usage" in (r.stdout + r.stderr).lower()
+
+
 @pytest.mark.skipif(
     not shutil.which("mpv") or not shutil.which("yt-dlp"),
     reason="mpv and yt-dlp required for check_dependencies",
