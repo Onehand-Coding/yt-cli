@@ -161,7 +161,7 @@ def test_mode_loop_reports_normal_return(monkeypatch):
     assert yt_cli._run_mode_loop(None, None, "Saved", None, None, None) is False
 
 
-def test_now_playing_actions_include_channel_and_save(monkeypatch):
+def test_now_playing_saved_channel_hides_save(monkeypatch):
     class UI:
         def __init__(self):
             self.codes = ["b"]
@@ -193,7 +193,7 @@ def test_now_playing_actions_include_channel_and_save(monkeypatch):
     labels = [label for label, _ in ui.actions[0]]
     assert "←" in labels
     assert "channel" in labels
-    assert "save" in labels
+    assert "save" not in labels
     assert "stop" in labels
     assert "detach" in labels
     assert "exit" in labels
@@ -226,3 +226,36 @@ def test_pick_stream_refresh_row_maps_to_retry():
     streams = [{"title": "One", "status": "live", "viewers_text": ""}]
     assert yt_cli.pick_stream(streams, "News5", UI(0)) == "retry"
     assert yt_cli.pick_stream(streams, "News5", UI(1)) == streams[0]
+
+
+def test_now_playing_unsaved_channel_offers_save(monkeypatch):
+    class UI:
+        def __init__(self):
+            self.codes = ["b"]
+            self.actions = []
+
+        def playing_action(self, header_lines, actions):
+            self.actions.append(actions)
+            return self.codes.pop(0)
+
+    ui = UI()
+    monkeypatch.setattr(yt_cli, "player_active", lambda: False)
+    monkeypatch.setattr(
+        yt_cli,
+        "NOW_PLAYING",
+        [
+            {
+                "title": "News5 live",
+                "kind": "channel",
+                "source": "News5",
+                "status": "live",
+                "pausable": False,
+                "channel_id": "UCx",
+                "source_id": "",
+                "save_item": {"kind": "channel", "channel_id": "UCx"},
+            }
+        ],
+    )
+    yt_cli.now_playing_screen({"news": {"sources": []}}, ui)
+    labels = [label for label, _ in ui.actions[0]]
+    assert "save" in labels

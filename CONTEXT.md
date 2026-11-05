@@ -69,7 +69,7 @@ directly at the wrapper file — still correct. E2E harness: `tests/e2e/`. Proje
   `play_fn`. (Bug found by E2E — `KeyError: 'name'`.)
 - **Action-menu labels must have unique filter keys per key letter.** fzf
   ranks matches by position/length, so a key like `p` that appears in multiple
-  labels picks the WRONG action. NEWS menu: `"player"` is now `"change player"`
+  labels picks the WRONG action. NEWS menu no longer has a player action; mpv is the default
   (p was needed for pause). Radio/Search tables were audited and are
   unambiguous. This bit AGAIN (2026-08-21): adding a `"save"` label made typing
   `s` select it over `"search"` (shorter line wins). The label is now `save`
@@ -310,7 +310,7 @@ Spec: `docs/specs/2026-11-04-unified-saved-channels-design.md`.
   returns there; `detach` exits and leaves the player running; `exit` stops and exits.
   `pause`/`play` appears for VOD, replays, search results, and presets, and is hidden for
   live news and radio. The first row is an arrow, not the word "back". Refresh streams is
-  a row on the live list, not a playing action. `change player` is the news output action; `channel` reopens the
+  a row on the live list, not a playing action. `save` is hidden when the channel is already saved; `channel` reopens the
   channel from Now Playing. Esc at main uses the detach/exit prompt when a player is
   active. Go-to Home from a direct `--radio`, `--stations`, or `--news` session opens
   the main menu instead of exiting.

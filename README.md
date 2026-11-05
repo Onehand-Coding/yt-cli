@@ -49,7 +49,7 @@ The action menu is shared by search, presets, radio, channels, and Now Playing.
 - `exit`: stop and exit.
 - `pause` / `play`: available for VOD, replays, search results, and presets.
 - `channel`: reopen the channel from Now Playing.
-- `change player`: choose mpv, vlc, or ffplay for the current stream.
+- `save`: hidden when the channel is already saved.
 
 Refresh streams is a row on the live list, not an action on the playing screen.
 

@@ -1293,7 +1293,6 @@ PLAY_ACTIONS_NEWS = [
     ("search", "s"),
     ("replay", "r"),
     ("toggle video", "v"),
-    ("change player", "p"),
     ("save", "k"),
     ("stop", "q"),
     ("detach", "d"),
@@ -1489,7 +1488,11 @@ def now_playing_screen(cfg, ui):
         rows.append(("replay", "r"))
         if kind != "station":
             rows.append(("toggle video", "v"))
-        if current.get("save_item"):
+        saved_channel = bool(
+            current.get("source_id")
+            or source_id_for_channel(cfg, current.get("channel_id"))
+        )
+        if current.get("save_item") and not saved_channel:
             rows.append(("save", "k"))
         rows += [("stop", "q"), ("detach", "d"), ("exit", "x")]
         return rows
@@ -4362,18 +4365,6 @@ def detect_player():
     return None
 
 
-def list_players():
-    """Return list of installed players."""
-    found = []
-    for p in ["mpv", "vlc", "ffplay"]:
-        try:
-            subprocess.run(["which", p], capture_output=True, check=True)
-            found.append(p)
-        except (subprocess.CalledProcessError, FileNotFoundError):
-            continue
-    return found
-
-
 def launch_news_player(url, player, quality="720", direct_url=None):
     """Launch player as background process. Returns Popen object.
     mpv gets the watch URL (yt-dlp handles YouTube live properly);
@@ -4508,17 +4499,6 @@ def pick_stream(streams, source_name, ui):
     if idx == 0:
         return "retry"
     return streams[idx - 1]
-
-
-def pick_player(current_player, ui):
-    players = list_players()
-    if not players:
-        return None
-    lines = [f"{'▶ ' if p == current_player else '  '}{p}" for p in players]
-    idx = ui.pick(lines, "player ❯ ", "Select player\n" + "─" * 44, "30%")
-    if idx is None:
-        return None
-    return players[idx]
 
 
 def confirm_search(query, ui):
@@ -4771,15 +4751,6 @@ def run_news_mode(cfg, ui, stop, goodbye, on_esc="quit", initial_source=None):
                         run_search_mode(cfg, ui, stop, _search_play_default(cfg), return_home=True)
                     elif action == "h":
                         run_history_screen(cfg, ui, stop, _search_play_default(cfg))
-                    elif action == "p":
-                        current = resolve_player()
-                        new_player = pick_player(current, ui)
-                        if new_player and new_player != current:
-                            player[0] = new_player
-                            state = load_state()
-                            state["news"]["player"] = new_player
-                            save_state(state)
-                            play_news(st)
                     return None
 
                 playing_menu(
@@ -4908,7 +4879,6 @@ def run_news_mode(cfg, ui, stop, goodbye, on_esc="quit", initial_source=None):
                     return lines
 
                 def channel_handle(action):
-                    nonlocal pl
                     stream = current_stream[0]
                     if action == "r":
                         play_news(stream, source_info)
@@ -4920,15 +4890,6 @@ def run_news_mode(cfg, ui, stop, goodbye, on_esc="quit", initial_source=None):
                         run_search_mode(cfg, ui, stop, _search_play_default(cfg), return_home=True)
                     elif action == "h":
                         run_history_screen(cfg, ui, stop, _search_play_default(cfg))
-                    elif action == "p":
-                        new_player = pick_player(pl, ui)
-                        if new_player and new_player != pl:
-                            player[0] = new_player
-                            pl = new_player
-                            state = load_state()
-                            state["news"]["player"] = new_player
-                            save_state(state)
-                            play_news(stream, source_info)
                     elif action == "k":
                         save_current(
                             cfg,
@@ -4948,10 +4909,15 @@ def run_news_mode(cfg, ui, stop, goodbye, on_esc="quit", initial_source=None):
                         )
                     return None
 
+                def channel_actions():
+                    if source_info.get("id"):
+                        return [a for a in PLAY_ACTIONS_NEWS if a[1] != "k"]
+                    return PLAY_ACTIONS_NEWS
+
                 result = playing_menu(
                     ui,
                     channel_header,
-                    lambda: PLAY_ACTIONS_NEWS,
+                    channel_actions,
                     lambda: stream_pausable(current_stream[0]),
                     channel_handle,
                     stop,

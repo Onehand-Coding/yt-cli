@@ -16,10 +16,6 @@ def flow_c():
     h.send("2\r", 0.4)
     ok &= h.wait_new("action ❯", 15)
     ok &= h.wait_new("playing", 90)
-    h.send("c\r", 0.4)
-    ok &= h.wait_new("player ❯", 8)
-    h.send("\x1b", 0.4)
-    ok &= h.wait_new("action ❯", 8)
     h.send("\x1b", 0.4)  # back to the stream list
     ok &= h.wait_for("stream ❯", 8)
     h.send("refresh\r", 0.4)
