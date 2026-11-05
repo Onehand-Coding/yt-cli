@@ -130,6 +130,12 @@ the PyPI pending publisher is GitHub `Onehand-Coding/yt-cli`, workflow
 
 ## Gotchas
 
+- mpv's `--video` is an alias for `vid`; there is no separate video-output
+  switch. `vid=no` deselects the track and tears down the VO, but a global
+  `mpv.conf force-window=yes` keeps an empty window alive anyway, so
+  `mpv_ipc_set_vid(False)` also clears `force-window`, and channel playback
+  (`launch_news_player`) passes `--force-window=no` plus the explicit `--vid`
+  pair like `build_mpv_cmd`. Covered by `tests/test_video_toggle.py`.
 - fzf lives at `/usr/bin/fzf` AND `/usr/sbin/fzf` AND `/sbin/fzf` — masking it
   for curses testing requires a PATH that excludes ALL of them (use the
   sandbox at `tests/e2e/bin` with symlinked python3/mpv/yt-dlp).
