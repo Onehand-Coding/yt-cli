@@ -43,3 +43,9 @@ jobs:
 
       - name: Tests
         run: uv run --extra dev pytest -q
+
+      - name: Build sdist and wheel
+        run: uv build
+
+      - name: Smoke-test the console script
+        run: uv run --no-project --isolated --with dist/*.whl yt-cli --version

@@ -4,6 +4,8 @@ __pycache__/
 .pytest_cache/
 .venv/
 venv/
+dist/
+build/
 *.sublime-workspace/
 tests/e2e/probe_dump.txt
 .pi/

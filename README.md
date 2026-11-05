@@ -57,10 +57,31 @@ Refresh streams is a row on the live list, not an action on the playing screen.
 ## Install
 
 ```bash
-ln -s "$PWD/yt-cli" ~/.local/bin/yt-cli
+uv tool install yt-cli-player
+yt-cli --version
 ```
 
-Runtime requirements: `mpv`, `yt-dlp`, and `fzf` (optional).
+Without `uv`, install it first:
+`curl -LsSf https://astral.sh/uv/install.sh | sh`. To try yt-cli without
+installing: `uvx --from yt-cli-player yt-cli`. Upgrade with
+`uv tool upgrade yt-cli-player`.
+
+The package is `yt-cli-player` (PyPI rejected `yt-cli` as too similar to an
+existing project); the command it installs is `yt-cli`. To run the tip of
+`main` instead of a release:
+`uv tool install git+https://github.com/Onehand-Coding/yt-cli`.
+
+Runtime requirements: `mpv`, `yt-dlp`, and `fzf` (optional). If `mpv` or
+`yt-dlp` is missing, the first run names the packages to install for apt, dnf,
+pacman, and brew.
+
+`music/<name>` shortcuts are created by the application itself: save a preset or
+station and accept the symlink prompt. They need no separate install step.
+
+Already symlinked a checkout at `~/.local/bin/yt-cli`? Remove it first:
+`uv tool install` will not overwrite an existing executable (`--force` also
+works). To develop against a checkout, `uv tool install --editable .` keeps the
+command pointing at your working tree.
 
 Files live in `~/.config/yt-cli/`:
 
@@ -72,8 +93,8 @@ Files live in `~/.config/yt-cli/`:
 ## Layout
 
 ```text
-yt-cli                 launcher; the PATH symlink points here
-yt_cli.py              application code
+yt-cli                 dev launcher for a repo checkout
+yt_cli.py              application code (installed as the yt-cli command)
 CONTEXT.md             architecture and decisions
 .github/workflows/     CI
 docs/specs/            design notes

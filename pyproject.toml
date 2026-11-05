@@ -3,11 +3,23 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "yt-cli"
-version = "1.0.0"
-description = "Unified YouTube search / radio / news player (monolithic single-file CLI)."
+name = "yt-cli-player"
+version = "1.1.0"
+description = "A terminal player for YouTube channels, YouTube presets, and internet radio."
 readme = "README.md"
 requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+keywords = ["youtube", "internet-radio", "mpv", "yt-dlp", "fzf", "tui"]
+classifiers = [
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Topic :: Multimedia :: Sound/Audio",
+    "Topic :: Multimedia :: Video",
+]
 dependencies = []
 
 [project.optional-dependencies]
@@ -17,8 +29,21 @@ dev = [
     "ruff>=0.6",
 ]
 
+[project.scripts]
+yt-cli = "yt_cli:cli"
+
+[project.urls]
+Homepage = "https://github.com/Onehand-Coding/yt-cli"
+Repository = "https://github.com/Onehand-Coding/yt-cli"
+Issues = "https://github.com/Onehand-Coding/yt-cli/issues"
+
 [tool.hatch.build.targets.wheel]
-bypass-selection = true
+only-include = ["yt_cli.py"]
+
+# The checkout's tests/e2e/bin has absolute symlinks (curl, mpv), which uv refuses
+# to unpack from an sdist. Ship only what the installed tool needs.
+[tool.hatch.build.targets.sdist]
+only-include = ["yt_cli.py", "yt-cli", "README.md", "LICENSE", "pyproject.toml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
