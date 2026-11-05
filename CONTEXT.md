@@ -47,7 +47,9 @@ the PyPI pending publisher is GitHub `Onehand-Coding/yt-cli`, workflow
 
 - `cli()` in yt_cli.py owns the KeyboardInterrupt/traceback guards; the repo
   `yt-cli` wrapper and the `__main__` block both call it. `--version`/`-V`
-  prints `yt-cli <version>` before config migration or dependency checks.
+  prints `yt-cli <version>` and `--help`/`-h` prints top-level usage, both
+  before config migration or dependency checks. `tests/test_cli.py` asserts
+  `--help` with no skipif, so it is exercised on CI machines without mpv/yt-dlp.
 - uv installs the bin entry on Unix as a symlink to `<tool venv>/bin/yt-cli`, so
   `music/<preset>` still presents `<preset>` as argv[0] and dispatch is
   unchanged. The save-symlink code's `Path(sys.argv[0]).resolve()` lands on that
@@ -64,6 +66,10 @@ the PyPI pending publisher is GitHub `Onehand-Coding/yt-cli`, workflow
   CI runs `uv build` and smoke-tests the console script from the wheel.
 - Dev: `uv tool install --editable .` replaces a hand-made `~/.local/bin/yt-cli`
   symlink; uv will not overwrite an existing executable without `--force`.
+- The repo is `ruff format` clean and CI gates on `ruff format --check .`; before
+  that, an editor formatter rewrote two unrelated lines on every write. CI runs
+  the test matrix on Python 3.10 and 3.12 (the `requires-python` floor is real,
+  not a claim), and the build plus wheel smoke test run once on 3.12.
 
 ## Architecture
 
@@ -150,7 +156,10 @@ the PyPI pending publisher is GitHub `Onehand-Coding/yt-cli`, workflow
 `flow_b.py` (presets + universal search, via `yt-cli --presets`), `flow_c.py`
 (channels, via `yt-cli --channels`), `flow_d.py` (curses fallback via fzf-free PATH),
 `flow_e.py` (save and navigation), `flow_f.py` (radio with an isolated `HOME`;
-no network/playback). All six flows pass. Run: `python3 flow_*.py` (kills stray
+no network/playback). All six flows pass. CI runs only `flow_f.py`: it is the one
+flow with no network and no playback. The rest need YouTube and a real player, and
+datacenter IPs get bot-walled, so they stay a local pre-release check. Run all of
+them with `python3 flow_*.py` (kills stray
 mpv/fzf first; each takes 1-5 min; requires network). Harness notes from the
 yt-cli2 work, still valid for any fzf-flow testing:
 

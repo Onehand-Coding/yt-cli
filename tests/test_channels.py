@@ -371,17 +371,11 @@ def test_search_live_returns_recent_when_nothing_is_live(monkeypatch):
                                                 "videoId": "recent00001",
                                                 "title": {
                                                     "runs": [
-                                                        {
-                                                            "text": "TV Patrol Express | November 4"
-                                                        }
+                                                        {"text": "TV Patrol Express | November 4"}
                                                     ]
                                                 },
-                                                "publishedTimeText": {
-                                                    "simpleText": "3 hours ago"
-                                                },
-                                                "ownerText": {
-                                                    "runs": [{"text": "ABS-CBN News"}]
-                                                },
+                                                "publishedTimeText": {"simpleText": "3 hours ago"},
+                                                "ownerText": {"runs": [{"text": "ABS-CBN News"}]},
                                             }
                                         }
                                     ]

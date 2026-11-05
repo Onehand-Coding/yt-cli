@@ -2169,9 +2169,7 @@ def pick_search_result(results, query, ui):
 def format_preset_row(info, now_playing_name, name_width):
     marker = C.PLAY if info["name"] == now_playing_name else " "
     badge = (
-        "  🔍"
-        if info.get("is_search_result")
-        else f"  {c(C.DIM, '[' + info['category'] + ']')}"
+        "  🔍" if info.get("is_search_result") else f"  {c(C.DIM, '[' + info['category'] + ']')}"
     )
     name = pad_display(truncate_display(info["name"], name_width), name_width)
     return f"  {marker}  {name}{badge}"
@@ -4825,7 +4823,9 @@ def run_news_mode(cfg, ui, stop, goodbye, on_esc="quit", initial_source=None):
                         settings["recent_hours"],
                     )
                 elif not channel_id:
-                    raise ChannelError("needs repair: run --channels --verify, then rebind this source")
+                    raise ChannelError(
+                        "needs repair: run --channels --verify, then rebind this source"
+                    )
                 else:
                     cached_streams = channel_lives(channel_id, settings["timeout"])
                     cached_streams = [
@@ -4988,6 +4988,37 @@ def play_stream_cli(url, player=None, quality="720", direct_url=None):
     except Exception as e:
         print(f"❌ Error playing stream: {e}")
         return False
+
+
+def print_main_help():
+    print(f"""
+🎬 yt-cli · YouTube channels, presets, and internet radio
+
+CONFIG: {CONFIG_PATH}
+
+USAGE:
+    yt-cli                        Saved / Search / History
+    yt-cli --presets / -p         YouTube presets
+    yt-cli --radio / -r           Internet radio stations
+    yt-cli --channels / -c        YouTube channels
+    yt-cli --version / -V         Print the version
+    yt-cli --help / -h            This message
+
+    yt-cli --presets --help       Preset flags and saved presets
+    yt-cli --radio --help         Radio flags and saved stations
+    yt-cli --channels --help      Channel flags and saved channels
+
+    ~/.local/bin/music/<name>     Play a saved preset or station
+
+REQUIREMENTS:
+    mpv                           Required
+    yt-dlp                        Required for YouTube search, presets, channels
+    fzf                           Optional, falls back to a curses menu
+
+FILES:
+    {CONFIG_DIR}/
+        config.json, state.json, history.json
+""")
 
 
 def print_news_help(sources):
@@ -5497,6 +5528,9 @@ def main():
     args = sys.argv[1:]
     if args and args[0] in ("--version", "-V"):
         print(f"{APP_NAME} {__version__}")
+        sys.exit(0)
+    if args and args[0] in ("--help", "-h"):
+        print_main_help()
         sys.exit(0)
     removed = {
         "--news": "--channels",

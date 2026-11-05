@@ -14,6 +14,7 @@ The application is Python standard library only. It uses `mpv`, `yt-dlp`, and
 | `yt-cli --presets` | Saved, filtered to YouTube presets |
 | `yt-cli --radio` | Saved, filtered to internet radio |
 | `yt-cli --channels` | Saved, filtered to YouTube channels |
+| `yt-cli --help` | Usage, requirements, and config paths |
 | `~/.local/bin/music/<name>` | A saved preset or radio station |
 
 
