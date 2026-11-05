@@ -1470,11 +1470,8 @@ def now_playing_screen(cfg, ui):
         rows.append(("replay", "r"))
         if kind != "station":
             rows.append(("toggle video", "v"))
-        saved_channel = bool(
-            current.get("source_id")
-            or source_id_for_channel(cfg, current.get("channel_id"))
-        )
-        if current.get("save_item") and not saved_channel:
+        save_item = current.get("save_item")
+        if save_item and not saved_item(cfg, save_item):
             rows.append(("save", "k"))
         rows += [("stop", "q"), ("detach", "d"), ("exit", "x")]
         return rows
@@ -1581,7 +1578,7 @@ def run_fzf(cfg, mode=None):
             return
         if choice == "▶ Now Playing":
             try:
-                now_playing_screen(cfg, ui)
+                now_playing_screen(load_config(), ui)
             except GoTo as g:
                 if g.dest != "home":
                     _run_mode_loop(
@@ -2586,7 +2583,9 @@ def radio_playing_loop(cfg, ui, info, settings, stop_fn, play_fn, goodbye_fn):
         return lines
 
     def actions():
-        if info.get("is_search_result"):
+        if info.get("is_search_result") and not saved_item(
+            cfg, {"kind": "video", "url": info.get("url")}
+        ):
             return PLAY_ACTIONS_RADIO
         return [a for a in PLAY_ACTIONS_RADIO if a[1] != "k"]
 
@@ -3401,6 +3400,24 @@ def news_toggle_source(cfg, sid, enable):
 
 def get_all_sources_from_config(cfg):
     return [dict(s) for s in cfg["news"]["sources"]]
+
+
+def saved_item(cfg, item):
+    kind = (item or {}).get("kind")
+    if kind == "channel":
+        return bool((item or {}).get("source_id")) or (
+            source_id_for_channel(cfg, (item or {}).get("channel_id")) is not None
+        )
+    url = (item or {}).get("url") or ""
+    if kind == "station":
+        return any(
+            isinstance(station, dict) and station.get("url") == url
+            for station in cfg.get("stations") or []
+        )
+    return any(
+        preset.get("url") == url
+        for preset in (cfg.get("radio") or {}).get("presets") or []
+    )
 
 
 def source_id_for_channel(cfg, channel_id):
@@ -4615,6 +4632,7 @@ def run_news_mode(cfg, ui, stop, goodbye, on_esc="quit", initial_source=None):
             "uploader": stream.get("source"),
             "kind": kind,
             "channel_id": (source_info or {}).get("channel_id", ""),
+            "source_id": (source_info or {}).get("id", ""),
             "channel_name": (source_info or {}).get("channel_name")
             or (source_info or {}).get("name"),
             "keywords": (source_info or {}).get("keywords"),
@@ -4874,7 +4892,7 @@ def run_news_mode(cfg, ui, stop, goodbye, on_esc="quit", initial_source=None):
                     elif action == "h":
                         run_history_screen(cfg, ui, stop, _search_play_default(cfg))
                     elif action == "k":
-                        save_current(
+                        slug = save_current(
                             cfg,
                             ui,
                             {
@@ -4890,6 +4908,8 @@ def run_news_mode(cfg, ui, stop, goodbye, on_esc="quit", initial_source=None):
                             },
                             default_kind="news",
                         )
+                        if slug and not source_info.get("id"):
+                            source_info["id"] = slug
                     return None
 
                 def channel_actions():
@@ -5402,7 +5422,7 @@ def _curses_main(stdscr, cfg, mode):
             break
         if choice == "▶ Now Playing":
             try:
-                now_playing_screen(cfg, ui)
+                now_playing_screen(load_config(), ui)
             except GoTo as g:
                 if g.dest != "home":
                     _run_mode_loop(

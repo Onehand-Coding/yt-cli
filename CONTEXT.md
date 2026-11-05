@@ -310,7 +310,7 @@ Spec: `docs/specs/2026-11-04-unified-saved-channels-design.md`.
   returns there; `detach` exits and leaves the player running; `exit` stops and exits.
   `pause`/`play` appears for VOD, replays, search results, and presets, and is hidden for
   live news and radio. The first row is an arrow, not the word "back". Refresh streams is
-  a row on the live list, not a playing action. `save` is hidden when the channel is
+  a row on the live list, not a playing action. `save` is hidden when the channel, preset, or station is
   already saved; `channel` reopens the channel from Now Playing. Exit or Esc at main
   closes the UI and leaves playback running; the header says so when a player is active.
   Go-to Home from a direct `--radio`, `--stations`, or `--news` session opens the main

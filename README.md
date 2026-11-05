@@ -49,7 +49,7 @@ The action menu is shared by search, presets, radio, channels, and Now Playing.
 - `exit`: stop and exit.
 - `pause` / `play`: available for VOD, replays, search results, and presets.
 - `channel`: reopen the channel from Now Playing.
-- `save`: hidden when the channel is already saved.
+- `save`: hidden when the channel, preset, or station is already saved.
 
 Exit or Esc at the main menu closes the UI and leaves the player running. Use `stop`
 from Now Playing to end playback.

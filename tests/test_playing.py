@@ -157,7 +157,11 @@ def test_now_playing_saved_channel_hides_save(monkeypatch):
                 "pausable": False,
                 "channel_id": "UCx",
                 "source_id": "news5",
-                "save_item": {"kind": "channel", "channel_id": "UCx"},
+                "save_item": {
+                    "kind": "channel",
+                    "channel_id": "UCx",
+                    "source_id": "news5",
+                },
             }
         ],
     )
@@ -229,5 +233,86 @@ def test_now_playing_unsaved_channel_offers_save(monkeypatch):
         ],
     )
     yt_cli.now_playing_screen({"news": {"sources": []}}, ui)
+    labels = [label for label, _ in ui.actions[0]]
+    assert "save" in labels
+
+
+def test_saved_item_recognizes_saved_urls_and_channels():
+    cfg = {
+        "radio": {"presets": [{"url": "preset-url"}]},
+        "stations": [{"url": "station-url"}],
+        "news": {"sources": [{"id": "news5", "channel_id": "UCx"}]},
+    }
+    assert yt_cli.saved_item(cfg, {"kind": "video", "url": "preset-url"})
+    assert not yt_cli.saved_item(cfg, {"kind": "video", "url": "other"})
+    assert yt_cli.saved_item(cfg, {"kind": "station", "url": "station-url"})
+    assert yt_cli.saved_item(cfg, {"kind": "channel", "channel_id": "UCx"})
+    assert not yt_cli.saved_item(cfg, {"kind": "channel", "channel_id": "UCy"})
+
+
+def test_now_playing_saved_preset_hides_save(monkeypatch):
+    class UI:
+        def __init__(self):
+            self.codes = ["b"]
+            self.actions = []
+
+        def playing_action(self, header_lines, actions):
+            self.actions.append(actions)
+            return self.codes.pop(0)
+
+    ui = UI()
+    monkeypatch.setattr(yt_cli, "player_active", lambda: False)
+    monkeypatch.setattr(
+        yt_cli,
+        "NOW_PLAYING",
+        [
+            {
+                "title": "Jazz",
+                "kind": "video",
+                "source": "Chill",
+                "status": "preset",
+                "pausable": True,
+                "save_item": {"kind": "video", "url": "preset-url"},
+            }
+        ],
+    )
+    yt_cli.now_playing_screen(
+        {"radio": {"presets": [{"url": "preset-url"}]}, "stations": [], "news": {"sources": []}},
+        ui,
+    )
+    labels = [label for label, _ in ui.actions[0]]
+    assert "save" not in labels
+
+
+def test_now_playing_unsaved_preset_offers_save(monkeypatch):
+    class UI:
+        def __init__(self):
+            self.codes = ["b"]
+            self.actions = []
+
+        def playing_action(self, header_lines, actions):
+            self.actions.append(actions)
+            return self.codes.pop(0)
+
+    ui = UI()
+    monkeypatch.setattr(yt_cli, "player_active", lambda: False)
+    monkeypatch.setattr(
+        yt_cli,
+        "NOW_PLAYING",
+        [
+            {
+                "title": "Jazz",
+                "kind": "video",
+                "source": "Chill",
+                "status": "preset",
+                "pausable": True,
+                "save_item": {"kind": "video", "url": "new-url"},
+            }
+        ],
+    )
+    yt_cli.now_playing_screen(
+        {"radio": {"presets": []}, "stations": [], "news": {"sources": []}},
+        ui,
+    )
     labels = [label for label, _ in ui.actions[0]]
     assert "save" in labels
